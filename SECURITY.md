@@ -309,6 +309,34 @@ and `verifyLog` reports the first bad entry. Honest limits:
   work (silently) and minting or credential changes go ahead with one line on stderr. The `via`
   field is a label the caller sends; a local program can fake it.
 
+## Desktop notifications
+
+Some events also raise a desktop notification, so a person sees at once that something
+security-relevant happened (possibly done by an AI agent or another local program) and what to do
+if it was not them. The event log stays the record; notifications are the alert. Nothing leaves the
+computer.
+
+- **What notifies:** a passphrase set for the first time, an unlock, a passphrase change, a reset,
+  repeated wrong passphrases (once per throttle window), a key issued with no limits or for all
+  models, looser limits on a key, auto-renew turned on, `tamper_detected`, and any change to these
+  settings. Everything else (sign-ins, locks, tighter limits, credential edits) does not.
+  Repeats of the same event about the same key within a minute are folded into one message plus
+  an "N more" summary.
+- **Turning one off needs the passphrase,** even during the grace period, and wrong ones count toward
+  the throttle. Turning one on needs only a session. `tamper_detected` and `notifications_changed`
+  cannot be turned off; every change is logged and itself notifies. The switches live in a signed
+  database row; if the row fails its signature, everything is treated as on and `tamper_detected`
+  is logged (once per process start).
+- **Delivery is best effort.** Focus / Do Not Disturb hides them, Linux needs `notify-send`
+  installed, Windows is not supported yet, and a failure to show one never affects the action or
+  the log entry. Check `wickey notifications test`.
+- **Not protected:** a same-user program can change the operating system's notification settings
+  for the sending app (on macOS that is Script Editor, which `osascript` is shown as), or suppress
+  them with Focus, without touching Wickey. Wickey's own switches cannot be flipped without the
+  passphrase, but the OS-level ones are outside its reach. The event log still records everything.
+- Text is passed to the OS helper as arguments, never inside a script, so a key label cannot inject
+  code. Notifications carry ids and labels only, never a key or passphrase.
+
 ## Other known limits
 
 - A key you put in your shell environment (`wickey env`, or one you exported yourself) is

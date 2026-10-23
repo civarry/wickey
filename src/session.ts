@@ -212,6 +212,17 @@ export function changePassphrase(current: string, next: string, via: Via = 'dash
 }
 
 /**
+ * Checks the passphrase for an action that must never ride on the grace period (like
+ * changePassphrase). Wrong guesses count toward the throttle. Starts nothing: no grace, no session.
+ */
+export function confirmPassphrase(passphrase: string | undefined, via: Via = 'dashboard'): void {
+  if (!vaultExists()) throw new AuthRequiredError('setup_required', SET_PASSPHRASE);
+  if (!isUnlocked()) throw new AuthRequiredError('passphrase_required', UNLOCK_STEP);
+  if (!passphrase) throw new AuthRequiredError('passphrase_required', PASSPHRASE_STEP);
+  recordAttempt(via, () => verifyPassphrase(passphrase));
+}
+
+/**
  * Gate for anything that mints a key or could redirect a real key: passes with the right
  * passphrase, or without one while the grace period is running.
  */

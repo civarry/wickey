@@ -15,6 +15,7 @@ dependencies.
 | `src/session.ts` | Setup, unlock, sign-in, in-memory sessions, grace period, `requireAuth`, wrong-passphrase throttle |
 | `src/vault.ts` | Encrypted `vault.json`, the in-memory keys, row-signing HMAC |
 | `src/events.ts` | Security event log (`events.log`): hash-chained, MAC-authenticated JSON Lines, `verifyLog`, `listEvents`, `checkpoint`, the anchor (`checkAnchor`, `guardAnchor`). `src/keychain.ts` is the macOS Keychain backend (injectable via `setKeychain`). `src/audit.ts` is the call-site helper (`logEvent`, the `via` label); session.ts and api.ts emit the events |
+| `src/notify.ts` | Desktop notifications for security events: `Notifier` backends (macOS `osascript`, Linux `notify-send`), per-type switches (signed `notification_settings` row), coalescing. Called from `appendEvent` |
 | `src/store.ts` | SQLite (`node:sqlite`): credentials, proxies, usage totals, request log, row signatures, issue/renew/rotate, limits, auto-renew |
 | `src/metering.ts` | Usage parsing (JSON and SSE, OpenAI and Anthropic shapes), the decoded response side copy, rate limiter, in-flight reservations, usage high-water marks, error bodies in OpenAI or Anthropic format |
 | `src/prompt.ts` | Hidden passphrase prompt (and a visible one for confirmations) via `/dev/tty` or `CONIN$` |
@@ -208,12 +209,50 @@ companion event:
 | `auto_renew_enabled` | issue/env or a limits change that turns it on | proxyId, via, window, maxLifetime (seconds) |
 | `credential_added` / `credential_changed` / `credential_removed` | api.ts | name, provider, baseUrlHost, via; changed adds fields, keyReplaced, baseUrlChanged |
 | `credentials_imported` | api.ts import (not dry runs) | count, via |
+| `notifications_changed` | api.ts notifications PATCH (`setNotificationEnabled`) | type, enabled, via |
+| `tamper_detected` | `guardAnchor`; notify.ts for a bad settings row | anchor fields, or `what` |
 
 `via` comes from the `x-wickey-via: cli` request header the CLI sets (anything else counts as
 `dashboard`); `setUp`/`unlock` called in a terminal default to `terminal`, and the setup link
 passes `setup_link`. It is a display label: a local program can send any value, so it is not proof.
 Logging is a record, not a gate (`logEvent`): a failed write never blocks unlock, sign-in or lock
 (silent), and for minting and credential changes it prints one line to stderr and carries on.
+
+### Desktop notifications (`src/notify.ts`)
+
+`appendEvent` calls `notifyEvent(entry)` after a successful write (so the CLI's `reset`, which runs
+with the proxy stopped, notifies from its own process). It never throws or waits; the log entry and
+the action stand whatever happens. Title is `BRAND.displayName`; body is what happened plus
+`If this wasn't you: <exact next step>`.
+
+| Event | Notifies | Subject (for coalescing) |
+|---|---|---|
+| `vault_created`, `unlocked`, `passphrase_changed`, `reset`, `passphrase_throttled` | always (unless switched off) | global |
+| `key_issued` | only when `unlimited` or `models = 'all'` | label, else proxy id |
+| `limits_loosened`, `auto_renew_enabled` | always (unless switched off) | proxy id |
+| `tamper_detected`, `notifications_changed` | always; cannot be switched off | global / type |
+
+Everything else (`signed_in`, `locked`, `unlock_failed`, `limits_tightened`, credential events...) does not notify.
+
+- **Backend** (`Notifier`: `name`, `available`, `reason`, `send(title, body)`). macOS: `/usr/bin/osascript`
+  via `execFile`, text passed as argv to an `on run argv` script after `--`, never in the script source.
+  Linux: `notify-send` found on `PATH`. Windows: unavailable. 3 s timeout, output ignored. Off under
+  `node --test` (NODE_TEST_CONTEXT) unless `WICKEY_NOTIFY=1`, and with `WICKEY_NOTIFY=0`. Tests inject one with `setNotifier`.
+- **Coalescing**: one message per (type, subject) per 60 s; later ones are counted and one
+  "N more ... in the last minute" follows when the window ends. A short-lived CLI process may exit
+  first and drop that summary. `notifications_changed` is never coalesced.
+- **Settings**: table `notification_settings` (one row, `disabled` = comma list, `sig` = HMAC of
+  `notify-settings|v1|<disabled>`), re-signed on every write (`writeNotificationSettings`, also
+  `resignAllRows`). No row = all on. A row that fails its signature = all on, and `tamper_detected`
+  `{what: 'notification settings'}` is logged once per process start. While the vault is locked the
+  signature cannot be checked, so the last verified list is used (all on if none).
+- **API**: `GET /api/notifications` (types, `enabled`, `locked`, backend) and
+  `PATCH /api/notifications {type, enabled, passphrase?}`. Turning a type off needs the current
+  passphrase in the body even during the grace period (`confirmPassphrase` in session.ts; wrong
+  ones count toward the throttle); turning on needs only a session. Each change logs
+  `notifications_changed {type, enabled, via}`.
+- **CLI**: `wickey notifications`, `notifications on|off <type>` (`off` prompts in a terminal),
+  `notifications test` (sends from the CLI process itself).
 
 ### events.log anchor (`events.anchor`, macOS Keychain)
 

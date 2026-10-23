@@ -12,6 +12,7 @@ import { runServiceCommand } from './service.ts';
 import { VIA_HEADER } from './audit.ts';
 import { graceSeconds, openSetup, setUp, unlock } from './session.ts';
 import { runSetup } from './setup.ts';
+import { currentNotifier } from './notify.ts';
 import { getProxy, listCredentials, listProxies, type Limits, type Proxy } from './store.ts';
 import { DEFAULT_TTL_SECONDS, formatDuration, parseTtl } from './ttl.ts';
 import { MIN_PASSPHRASE, WrongPassphraseError, vaultExists } from './vault.ts';
@@ -31,6 +32,10 @@ Server
   unlock                 Unlock a running proxy and start the grace period
   lock                   End the grace period now and sign every session out (no passphrase needed)
   passphrase             Change the passphrase (asks for the current one even during the grace period)
+  notifications          Desktop alerts for security events (unlock, passphrase change, unlimited keys, tampering...).
+  notifications off <type>   Turn one type off. Asks for the passphrase in a terminal, even during the grace period.
+  notifications on <type>    Turn one type back on.
+  notifications test     Show one test notification.
   reset                  Forgot the passphrase? Delete the vault and all data, then set up again.
                          Asks for confirmation in a terminal, with the proxy stopped. Provider keys are not revoked.
 
@@ -467,6 +472,42 @@ async function main(argv: string[]): Promise<void> {
       cli.passphrase = current;
       const data = await call('POST', '/api/passphrase', { current, next }, false);
       console.log(data.message);
+      return;
+    }
+
+    case 'notifications': {
+      const sub = arg;
+      const type = positionals[2];
+      if (sub === 'test') {
+        const n = currentNotifier();
+        if (!n.available) fail(`Desktop notifications are not available here: ${n.reason ?? 'no backend'}`);
+        n.send(BRAND.displayName, 'This is a test notification. Security events will look like this.');
+        console.log(`Sent a test notification through ${n.name}. If you saw nothing, check the system's notification settings (Focus mode hides them).`);
+        return;
+      }
+      if (sub === 'on' || sub === 'off') {
+        if (!type) fail(`Usage: wickey notifications ${sub} <type>. Run \`wickey notifications\` to see the types.`);
+        let passphrase: string | undefined;
+        if (sub === 'off') {
+          // Always typed, even inside the grace period; the server checks it again.
+          if (!hasTerminal()) fail(noTerminalMessage());
+          const typed = await promptHidden('Wickey passphrase: ');
+          if (!typed) fail('Cancelled.');
+          cli.passphrase = typed;
+          passphrase = typed;
+        }
+        const data = await call('PATCH', '/api/notifications', { type, enabled: sub === 'on', ...(passphrase ? { passphrase } : {}) });
+        console.log(`Notifications for ${type} are ${sub}.${data.backend.available ? ' A notification about this change was sent.' : ''}`);
+        if (!data.backend.available) console.log(`No desktop notifications can be shown here: ${data.backend.reason ?? 'no backend'}`);
+        return;
+      }
+      if (sub !== undefined) fail('Usage: wickey notifications [on <type> | off <type> | test]');
+      const data = await call('GET', '/api/notifications');
+      console.log(table([
+        ['TYPE', 'STATE', 'WHAT'],
+        ...data.types.map((t: any) => [t.type, t.enabled ? (t.locked ? 'on (always)' : 'on') : 'off', t.label]),
+      ]));
+      console.log(data.backend.available ? `\nShown through ${data.backend.name}.` : `\nNo desktop notifications can be shown here: ${data.backend.reason ?? 'no backend'}`);
       return;
     }
 

@@ -9,6 +9,8 @@
 export const BRAND = {
   /** CLI command name, as users type it. */
   command: 'wickey',
+  /** Title of desktop notifications. */
+  displayName: 'Wickey',
   /** Data directory under the user's home. */
   dataDirName: '.wickey',
   dbFileName: 'wickey.db',

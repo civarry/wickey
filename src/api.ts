@@ -34,11 +34,12 @@ import {
 import { VIA_HEADER, logEvent, viaFromHeader, type Via } from './audit.ts';
 import { listEvents, type EventData } from './events.ts';
 import { humanRequired } from './human.ts';
+import { isLockedOn, isNotifyType, notificationSettings, setNotificationEnabled } from './notify.ts';
 import { isRollbackFlagged } from './metering.ts';
 import { ensureModels, forceRefreshModels } from './models.ts';
 import {
   AuthRequiredError, SESSION_COOKIE, SIGN_IN_STEP, TooManyAttemptsError, changePassphrase, createSession, endSession, lock, publicStatus,
-  requireAuth, sessionIdFromCookie, sessionState, setUp, setupTokenMatches, signIn, touchSession, unlock,
+  confirmPassphrase, requireAuth, sessionIdFromCookie, sessionState, setUp, setupTokenMatches, signIn, touchSession, unlock,
 } from './session.ts';
 import { DEFAULT_TTL_SECONDS, parseTtl } from './ttl.ts';
 import { MIN_PASSPHRASE, WrongPassphraseError, isUnlocked, vaultExists } from './vault.ts';
@@ -446,6 +447,22 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
     }
     if (!existing.autoRenew && nextAutoRenew) logAutoRenewOn(existing.id, nextAutoRenew, via(req));
     return json(res, 200, { proxy: updated });
+  }
+
+  if (method === 'GET' && path === '/api/notifications') return json(res, 200, notificationSettings());
+
+  // Turning a type ON needs only the session. Turning one OFF needs the passphrase in the body even
+  // during the grace period (like changing the passphrase): otherwise a program could silence the alerts before acting.
+  if (method === 'PATCH' && path === '/api/notifications') {
+    const body = await readJson(req, ['type', 'enabled', 'passphrase']);
+    if (!isNotifyType(body.type)) throw new HttpError(400, 'type must be one of the notification types listed by GET /api/notifications.');
+    if (typeof body.enabled !== 'boolean') throw new HttpError(400, 'enabled must be true or false.');
+    if (!body.enabled) {
+      if (isLockedOn(body.type)) throw new HttpError(400, `"${body.type}" notifications cannot be turned off.`);
+      confirmPassphrase(typeof body.passphrase === 'string' ? body.passphrase : undefined, via(req));
+    }
+    setNotificationEnabled(body.type, body.enabled, via(req));
+    return json(res, 200, notificationSettings());
   }
 
   // Security event log, newest first, with the integrity summary. Session only: it never holds secrets.

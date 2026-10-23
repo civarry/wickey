@@ -236,6 +236,7 @@ script Wickey.
 | `unlock` | Unlock a running proxy and start the grace period |
 | `lock` | End the grace period now and sign every dashboard tab out (no passphrase needed) |
 | `passphrase` | Change the passphrase. Asks (hidden) for the current one, even during the grace period, then the new one twice |
+| `notifications [on <type>\|off <type>\|test]` | Desktop alerts for security events (unlock, passphrase change, reset, repeated wrong passphrases, unlimited keys, looser limits, auto-renew, tampering). Lists them with no argument; `off` asks for the passphrase in a terminal, even during the grace period; `test` shows one. macOS and Linux (`notify-send`); Windows not yet |
 | `reset` | Forgot the passphrase: delete the vault and all data, then set up again. Asks you to type `reset` in a terminal, and refuses while the proxy runs |
 | `add <name> --provider <p> [--base-url <url>] [--auth bearer\|x-api-key]` | Store a credential; the key comes from a hidden prompt or stdin. Providers: `openai`, `anthropic`, `openrouter`, `custom` (needs `--base-url`) |
 | `creds` | List stored credentials (never shows keys) |

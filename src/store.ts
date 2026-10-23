@@ -169,6 +169,13 @@ function open(): DatabaseSync {
       error TEXT,
       unavailable INTEGER NOT NULL DEFAULT 0
     );
+    -- Which notification types are switched off (one row, id 1). Signed like the other rows; a
+    -- missing row means everything is on, and so does one that fails its signature.
+    CREATE TABLE IF NOT EXISTS notification_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      disabled TEXT NOT NULL,
+      sig TEXT
+    );
   `);
   const columns = db.prepare('PRAGMA table_info(proxies)').all().map((c) => c.name);
   // Only the hash of a proxy key is kept; the key itself is shown once, at issue or rotate. The
@@ -362,6 +369,13 @@ function ensureUsageRow(proxyId: string): void {
   const res = open().prepare('INSERT OR IGNORE INTO proxy_usage (proxy_id) VALUES (?)').run(proxyId);
   if (res.changes) resignUsage(proxyId);
 }
+function notifySigData(disabled: string): string {
+  return ['notify-settings', 'v1', disabled].join('|');
+}
+function resignNotifySettings(): void {
+  const row = open().prepare('SELECT * FROM notification_settings WHERE id = 1').get() as Record<string, any>;
+  open().prepare('UPDATE notification_settings SET sig = ? WHERE id = 1').run(sign(notifySigData(row.disabled)));
+}
 function resignCredential(id: string): void {
   const row = open().prepare('SELECT * FROM credentials WHERE id = ?').get(id) as Record<string, any>;
   open().prepare('UPDATE credentials SET sig = ? WHERE id = ?').run(sign(credentialSigData(row)), id);
@@ -414,6 +428,9 @@ export function resignAllRows(): void {
     }
     for (const r of d.prepare('SELECT * FROM proxy_usage').all() as Record<string, any>[]) {
       d.prepare('UPDATE proxy_usage SET sig = ? WHERE proxy_id = ?').run(sign(usageSigData(r)), r.proxy_id);
+    }
+    for (const r of d.prepare('SELECT * FROM notification_settings').all() as Record<string, any>[]) {
+      d.prepare('UPDATE notification_settings SET sig = ? WHERE id = 1').run(sign(notifySigData(r.disabled)));
     }
     d.exec('COMMIT');
   } catch (err) {
@@ -1086,4 +1103,32 @@ export function setUsageReporting(credentialId: string, flags: { usage?: UsageFl
   if (flags.streamUsage !== undefined && !['reports', 'missing', 'rejects_option'].includes(flags.streamUsage)) throw new Error('Invalid stream usage flag.');
   if (flags.usage !== undefined) open().prepare('UPDATE credentials SET usage_reporting = ? WHERE id = ?').run(flags.usage, credentialId);
   if (flags.streamUsage !== undefined) open().prepare('UPDATE credentials SET stream_usage = ? WHERE id = ?').run(flags.streamUsage, credentialId);
+}
+
+// ---- Notification settings (signed) ----
+
+export type NotifySettingsRead =
+  | { state: 'ok'; disabled: string[] }
+  | { state: 'missing' } // never changed: everything is on
+  | { state: 'tampered' } // fails its signature: callers treat everything as on
+  | { state: 'unverified' }; // locked, so the signature cannot be checked
+
+/**
+ * Reads the list of switched-off notification types. Never creates the database: after a reset
+ * (or on a fresh install) there may be none, and that simply means "all on".
+ */
+export function readNotificationSettings(): NotifySettingsRead {
+  if (!fs.existsSync(config().dbPath)) return { state: 'missing' };
+  const row = open().prepare('SELECT * FROM notification_settings WHERE id = 1').get() as Record<string, any> | undefined;
+  if (!row) return { state: 'missing' };
+  if (!isUnlocked()) return { state: 'unverified' };
+  if (!verifySignature(notifySigData(String(row.disabled)), row.sig ?? null)) return { state: 'tampered' };
+  return { state: 'ok', disabled: String(row.disabled) === '' ? [] : String(row.disabled).split(',') };
+}
+
+/** Replaces the switched-off list and re-signs. Writing over a tampered row is fine: it only ever held "off" switches, and a bad one already counts as all on. */
+export function writeNotificationSettings(disabled: string[]): void {
+  const list = [...new Set(disabled)].sort().join(',');
+  open().prepare('INSERT INTO notification_settings (id, disabled) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET disabled = excluded.disabled').run(list);
+  resignNotifySettings();
 }

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.ts';
 import { defaultKeychain, type Keychain } from './keychain.ts';
+import { notifyEvent } from './notify.ts';
 import { eventMac, isUnlocked, verifyEventMac } from './vault.ts';
 
 // Security event log: an append-only JSON Lines file (`events.log`) that a same-user program
@@ -284,6 +285,9 @@ export function appendEvent(type: string, data: EventData = {}, opts: { signed?:
     fs.closeSync(fd);
   }
   writeAnchor(entry);
+  // After the entry is safely on disk. Never throws and never waits: the log is the record,
+  // the notification is only the alert (and also covers the CLI's `reset`, which has no proxy).
+  notifyEvent(entry);
   return entry;
 }
 
