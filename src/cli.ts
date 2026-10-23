@@ -9,6 +9,7 @@ import { RotatingLog, hardenDataDir, redirectOutput } from './logfile.ts';
 import { createProxyServer } from './proxy.ts';
 import { isProxyRunning, performReset, planReset } from './reset.ts';
 import { runServiceCommand } from './service.ts';
+import { VIA_HEADER } from './audit.ts';
 import { graceSeconds, openSetup, setUp, unlock } from './session.ts';
 import { runSetup } from './setup.ts';
 import { getProxy, listCredentials, listProxies, type Limits, type Proxy } from './store.ts';
@@ -134,7 +135,7 @@ async function send(method: string, path: string, body: Record<string, unknown>,
   try {
     return await fetch(url(path), {
       method,
-      headers: { [BRAND.requestHeader]: '1', 'content-type': 'application/json', ...(cookie ? { cookie } : {}) },
+      headers: { [BRAND.requestHeader]: '1', [VIA_HEADER]: 'cli', 'content-type': 'application/json', ...(cookie ? { cookie } : {}) },
       body: method === 'GET' ? undefined : JSON.stringify(body),
     });
   } catch {
@@ -147,7 +148,7 @@ async function endCliSession(): Promise<void> {
   const cookie = cli.cookie;
   cli.cookie = null;
   if (!cookie) return;
-  await fetch(url('/api/signout'), { method: 'POST', headers: { [BRAND.requestHeader]: '1', cookie } }).catch(() => {});
+  await fetch(url('/api/signout'), { method: 'POST', headers: { [BRAND.requestHeader]: '1', [VIA_HEADER]: 'cli', cookie } }).catch(() => {});
 }
 
 async function failAfterSignOut(message: string): Promise<never> {

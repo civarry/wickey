@@ -26,9 +26,13 @@ import {
   setAutoRenew,
   setLimits,
   updateCredential,
+  type AutoRenew,
   type IssuedProxy,
+  type Limits,
+  type Proxy,
 } from './store.ts';
-import { listEvents } from './events.ts';
+import { VIA_HEADER, logEvent, viaFromHeader, type Via } from './audit.ts';
+import { listEvents, type EventData } from './events.ts';
 import { humanRequired } from './human.ts';
 import { isRollbackFlagged } from './metering.ts';
 import { ensureModels, forceRefreshModels } from './models.ts';
@@ -116,8 +120,8 @@ function serveDashboard(req: http.IncomingMessage, res: http.ServerResponse, pat
 const MAX_BODY = 64 * 1024;
 
 /** Minting or redirecting a real key needs the passphrase in the body, or the grace period. */
-function auth(body: Record<string, any>): void {
-  requireAuth(typeof body.passphrase === 'string' && body.passphrase ? body.passphrase : undefined);
+function auth(body: Record<string, any>, how: Via): void {
+  requireAuth(typeof body.passphrase === 'string' && body.passphrase ? body.passphrase : undefined, how);
 }
 
 class HttpError extends Error {
@@ -207,6 +211,38 @@ function sessionCookie(id: string): Record<string, string> {
  */
 const PUBLIC_ROUTES = new Set(['GET /api/session-status', 'POST /api/setup', 'POST /api/unlock', 'POST /api/signin', 'POST /api/lock']);
 
+const via = (req: http.IncomingMessage): Via => viaFromHeader(req.headers[VIA_HEADER]);
+
+/** Limits as short text for the event log (ids and numbers only). */
+function limitsText(l: Limits, ar: AutoRenew | null): string {
+  const models = l.models === null ? 'all' : l.models.length === 0 ? 'none' : `${l.models.length} selected`;
+  return `models ${models}, rpm ${l.rpm ?? 'none'}, token cap ${l.tokenCap ?? 'none'}, ${l.refuseUncounted ? 'refuse uncounted' : 'allow uncounted'}, auto-renew ${ar ? `${ar.windowSeconds}s window` : 'off'}`;
+}
+
+function baseUrlHost(baseUrl: string): string {
+  try { return new URL(baseUrl).host; } catch { return ''; }
+}
+
+function credentialInfo(c: { name: string; provider: string; baseUrl: string }): EventData {
+  return { name: c.name, provider: c.provider, baseUrlHost: baseUrlHost(c.baseUrl) };
+}
+
+function logAutoRenewOn(proxyId: string, ar: AutoRenew, how: Via): void {
+  logEvent('auto_renew_enabled', { proxyId, via: how, window: ar.windowSeconds, maxLifetime: Math.max(0, Math.round((ar.maxExpiresAt - Date.now()) / 1000)) }, 'warn');
+}
+
+/** One `key_issued` per key minted (issue, env, rotate), plus `auto_renew_enabled` when it starts renewing. */
+function logMint(proxy: Proxy, op: 'issue' | 'env' | 'rotate', how: Via, autoRenewWasOn = false): void {
+  const l = proxy.limits;
+  logEvent('key_issued', {
+    proxyId: proxy.id, credential: proxy.credentialName, label: proxy.label, via: how, op,
+    models: l.models === null ? 'all' : l.models.length === 0 ? 'none' : l.models.length,
+    rpm: l.rpm, tokenCap: l.tokenCap, autoRenew: proxy.autoRenew !== null,
+    unlimited: l.models === null && l.rpm === null && l.tokenCap === null,
+  }, 'warn');
+  if (proxy.autoRenew && !autoRenewWasOn) logAutoRenewOn(proxy.id, proxy.autoRenew, how);
+}
+
 function issuedBody(req: http.IncomingMessage, issued: IssuedProxy) {
   return { proxy: issued.proxy, token: issued.token, baseUrl: `${proxyOrigin(req)}/p/${issued.proxy.id}` };
 }
@@ -230,7 +266,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
 
   if (method === 'POST' && path === '/api/signin') {
     const body = await readJson(req, ['passphrase']);
-    signIn(String(body.passphrase ?? ''));
+    signIn(String(body.passphrase ?? ''), via(req));
     // A new session each time: a cookie that was sent along is never promoted.
     return json(res, 200, { session: sessionState() }, sessionCookie(createSession()));
   }
@@ -254,13 +290,13 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
     if (!setupTokenMatches(body.token)) throw new HttpError(403, humanRequired(`open the one-time setup link printed by \`${BRAND.command} start\`, or run \`${BRAND.command} setup\` in their own terminal`), true);
     const passphrase = String(body.passphrase ?? '');
     if (passphrase.length < MIN_PASSPHRASE) throw new HttpError(400, `Passphrase must be at least ${MIN_PASSPHRASE} characters.`);
-    setUp(passphrase);
+    setUp(passphrase, 'setup_link');
     return json(res, 201, { ok: true }, sessionCookie(createSession()));
   }
 
   if (method === 'POST' && path === '/api/unlock') {
     const body = await readJson(req, ['passphrase']);
-    unlock(String(body.passphrase ?? ''));
+    unlock(String(body.passphrase ?? ''), via(req), true);
     return json(res, 200, { session: sessionState() }, sessionCookie(createSession()));
   }
 
@@ -271,7 +307,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
       throw new HttpError(400, 'Send the current and the new passphrase.');
     }
     if (vaultExists() && !isUnlocked()) throw new HttpError(409, 'Wickey is locked. Unlock it with your passphrase first.');
-    changePassphrase(body.current, body.next);
+    changePassphrase(body.current, body.next, via(req));
     return json(res, 200, {
       session: sessionState(),
       message: 'Passphrase changed. Minting is locked: the next key you mint asks for the new passphrase. An old copy of vault.json (a backup, say) still opens with the old passphrase.',
@@ -279,7 +315,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
   }
 
   if (method === 'POST' && path === '/api/lock') {
-    lock();
+    lock(via(req));
     return json(res, 200, { session: sessionState() });
   }
 
@@ -290,8 +326,9 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
     if (!label || !credential) throw new HttpError(400, 'label and credential are required.');
     const limits = body.limits == null ? undefined : normalizeLimits(body.limits);
     // Every run mints: a key is never handed out twice, so nothing reusable sits in the database.
-    auth(body);
+    auth(body, via(req));
     const result = mintEnvProxy({ label, credential, ttlSeconds: ttlFrom(body.ttl, DEFAULT_TTL_SECONDS)!, limits, autoRenew: body.autoRenew });
+    logMint(result.proxy, 'env', via(req));
     return json(res, 200, issuedBody(req, result));
   }
 
@@ -300,7 +337,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
     const name = String(body.name ?? '').trim();
     if (!isProvider(String(body.provider))) throw new HttpError(400, 'Unknown provider.');
     if (body.authStyle && body.authStyle !== 'bearer' && body.authStyle !== 'x-api-key') throw new HttpError(400, 'Invalid auth style.');
-    auth(body);
+    auth(body, via(req));
     const credential = addCredential({
       name,
       provider: body.provider,
@@ -308,17 +345,21 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
       baseUrl: body.baseUrl ? String(body.baseUrl).trim() : undefined,
       authStyle: (body.authStyle || undefined) as AuthStyle | undefined,
     });
+    logEvent('credential_added', { ...credentialInfo(credential), via: via(req) }, 'warn');
     return json(res, 201, { credential: withScope(credential) });
   }
 
   // Both modes need auth: even a dry run tells the caller whether a given key is already stored.
   if (method === 'POST' && path === '/api/credentials/import') {
     const body = await readJson(req, ['entries', 'dryRun', 'passphrase']);
-    auth(body);
+    auth(body, via(req));
     if (!Array.isArray(body.entries) || !body.entries.length) throw new HttpError(400, 'entries must be a non-empty list.');
     if (body.entries.length > MAX_IMPORT_ENTRIES) throw new HttpError(400, `Import at most ${MAX_IMPORT_ENTRIES} credentials at a time.`);
     if (typeof body.dryRun !== 'boolean') throw new HttpError(400, 'dryRun must be true or false.');
-    return json(res, 200, { dryRun: body.dryRun, results: importCredentials(body.entries, body.dryRun) });
+    const results = importCredentials(body.entries, body.dryRun);
+    const count = results.filter((r) => r.outcome === 'imported').length;
+    if (count > 0) logEvent('credentials_imported', { count, via: via(req) }, 'warn');
+    return json(res, 200, { dryRun: body.dryRun, results });
   }
 
   if (method === 'PATCH' && (m = /^\/api\/credentials\/([^/]+)$/.exec(path))) {
@@ -326,7 +367,8 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
     const str = (v: unknown) => (v === undefined || v === null ? undefined : String(v).trim());
     const apiKey = str(body.apiKey);
     // Editing can point a real key at a different server, so it needs the same gate as minting.
-    auth(body);
+    auth(body, via(req));
+    const before = getCredential(decodeURIComponent(m[1]));
     const credential = updateCredential(decodeURIComponent(m[1]), {
       name: str(body.name),
       baseUrl: str(body.baseUrl),
@@ -334,11 +376,24 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
       // A blank key field means "keep the current key".
       apiKey: apiKey ? apiKey : undefined,
     });
+    if (before) {
+      const fields = [
+        ...(credential.name !== before.name ? ['name'] : []),
+        ...(credential.baseUrl !== before.baseUrl ? ['baseUrl'] : []),
+        ...(credential.authStyle !== before.authStyle ? ['authStyle'] : []),
+        ...(apiKey ? ['apiKey'] : []),
+      ];
+      if (fields.length) {
+        logEvent('credential_changed', { ...credentialInfo(credential), fields, keyReplaced: !!apiKey, baseUrlChanged: credential.baseUrl !== before.baseUrl, via: via(req) }, 'warn');
+      }
+    }
     return json(res, 200, { credential: withScope(credential) });
   }
 
   if (method === 'DELETE' && (m = /^\/api\/credentials\/([^/]+)$/.exec(path))) {
-    return json(res, 200, { credential: withScope(removeCredential(decodeURIComponent(m[1]))) });
+    const removed = removeCredential(decodeURIComponent(m[1]));
+    logEvent('credential_removed', { ...credentialInfo(removed), via: via(req) }, 'warn');
+    return json(res, 200, { credential: withScope(removed) });
   }
 
   // Listing models mints nothing and changes no row, so no requireAuth; it does use the real key, so the vault must be unlocked.
@@ -356,7 +411,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
 
   if (method === 'POST' && path === '/api/proxies') {
     const body = await readJson(req, ['credential', 'label', 'ttl', 'limits', 'autoRenew', 'passphrase']);
-    auth(body);
+    auth(body, via(req));
     const issued = issueProxy({
       credential: String(body.credential ?? ''),
       ttlSeconds: ttlFrom(body.ttl, DEFAULT_TTL_SECONDS)!,
@@ -364,6 +419,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
       limits: body.limits,
       autoRenew: body.autoRenew,
     });
+    logMint(issued.proxy, 'issue', via(req));
     return json(res, 201, issuedBody(req, issued));
   }
 
@@ -379,9 +435,17 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
       ? normalizeAutoRenew(body.autoRenew, { ttlSeconds: existing.ttlSeconds, expiresAt: existing.expiresAt, now: Date.now(), current: existing.autoRenew })
       : existing.autoRenew;
     // Tightening only takes access away, like expire; loosening (including enabling or raising auto-renew) is as sensitive as minting.
-    if (isLoosening(existing.limits, next, existing.autoRenew, nextAutoRenew)) auth(body);
+    const loosening = isLoosening(existing.limits, next, existing.autoRenew, nextAutoRenew);
+    if (loosening) auth(body, via(req));
     if (body.limits != null) setLimits(existing.id, next);
-    return json(res, 200, { proxy: editsAutoRenew ? setAutoRenew(existing.id, nextAutoRenew) : getProxy(existing.id) });
+    const updated = editsAutoRenew ? setAutoRenew(existing.id, nextAutoRenew) : getProxy(existing.id);
+    const was = limitsText(existing.limits, existing.autoRenew);
+    const now = limitsText(next, nextAutoRenew);
+    if (was !== now || existing.autoRenew?.maxExpiresAt !== nextAutoRenew?.maxExpiresAt) {
+      logEvent(loosening ? 'limits_loosened' : 'limits_tightened', { proxyId: existing.id, via: via(req), before: was, after: now }, 'warn');
+    }
+    if (!existing.autoRenew && nextAutoRenew) logAutoRenewOn(existing.id, nextAutoRenew, via(req));
+    return json(res, 200, { proxy: updated });
   }
 
   // Security event log, newest first, with the integrity summary. Session only: it never holds secrets.
@@ -424,16 +488,19 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
 
   if (method === 'POST' && (m = /^\/api\/proxies\/([a-f0-9]+)\/renew$/.exec(path))) {
     const body = await readJson(req, ['ttl', 'passphrase']);
-    auth(body);
+    auth(body, via(req));
     const proxy = renewProxy(m[1], ttlFrom(body.ttl, undefined));
+    logEvent('key_renewed', { proxyId: proxy.id, via: via(req) }, 'warn');
     // The key itself is unchanged and not stored, so there is nothing to show.
     return json(res, 200, { proxy, baseUrl: `${proxyOrigin(req)}/p/${proxy.id}` });
   }
 
   if (method === 'POST' && (m = /^\/api\/proxies\/([a-f0-9]+)\/rotate$/.exec(path))) {
     const body = await readJson(req, ['ttl', 'passphrase']);
-    auth(body);
-    return json(res, 200, issuedBody(req, rotateProxy(m[1], ttlFrom(body.ttl, undefined))));
+    auth(body, via(req));
+    const rotated = rotateProxy(m[1], ttlFrom(body.ttl, undefined));
+    logMint(rotated.proxy, 'rotate', via(req), true);
+    return json(res, 200, issuedBody(req, rotated));
   }
 
   if (method === 'POST' && (m = /^\/api\/proxies\/([a-f0-9]+)\/expire$/.exec(path))) {

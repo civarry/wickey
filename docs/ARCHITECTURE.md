@@ -14,7 +14,7 @@ dependencies.
 | `src/api.ts` | Dashboard page and `/api/*`, with Host, Origin and header checks |
 | `src/session.ts` | Setup, unlock, sign-in, in-memory sessions, grace period, `requireAuth`, wrong-passphrase throttle |
 | `src/vault.ts` | Encrypted `vault.json`, the in-memory keys, row-signing HMAC |
-| `src/events.ts` | Security event log (`events.log`): hash-chained, MAC-authenticated JSON Lines, `verifyLog`, `listEvents`, `checkpoint`. Not yet called from session/api/cli actions |
+| `src/events.ts` | Security event log (`events.log`): hash-chained, MAC-authenticated JSON Lines, `verifyLog`, `listEvents`, `checkpoint`. `src/audit.ts` is the call-site helper (`logEvent`, the `via` label); session.ts and api.ts emit the events |
 | `src/store.ts` | SQLite (`node:sqlite`): credentials, proxies, usage totals, request log, row signatures, issue/renew/rotate, limits, auto-renew |
 | `src/metering.ts` | Usage parsing (JSON and SSE, OpenAI and Anthropic shapes), the decoded response side copy, rate limiter, in-flight reservations, usage high-water marks, error bodies in OpenAI or Anthropic format |
 | `src/prompt.ts` | Hidden passphrase prompt (and a visible one for confirmations) via `/dev/tty` or `CONIN$` |
@@ -189,6 +189,31 @@ MACs are reported as `before_reset` (not verifiable), not as tampering. A real r
 MAC; a mix of passing and failing old MACs before a `reset` is reported as tampering (someone
 inserting a fake reset). `GET /api/events?before=<seq>&limit=<n>` (session required, default 50,
 max 200, newest first) returns entries with a `trust` field plus the `verifyLog` summary.
+
+Events written by actions (`data` is ids, names and limits only; `via` is `dashboard`, `cli`,
+`terminal` or `setup_link`). One action writes one event, with `auto_renew_enabled` as the one
+companion event:
+
+| Type | Emitted in | Data |
+|---|---|---|
+| `vault_created` | `setUp` (session.ts) | via |
+| `unlocked` / `signed_in` | `unlock`, `signIn` | via. `unlocked` = locked to unlocked; `signed_in` = a session made while already unlocked |
+| `unlock_failed` | `recordAttempt` (unlock, sign-in, passphrase change, gated actions) | via |
+| `passphrase_throttled` | `checkThrottle` | once per throttle window |
+| `locked`, `passphrase_changed` | `lock`, `changePassphrase` | via |
+| `reset` | `performReset` (reset.ts) | credentials, proxies (unsigned) |
+| `key_issued` | api.ts `logMint`: issue, env, rotate | proxyId, credential, label, via, op, models (`all`/`none`/count), rpm, tokenCap, autoRenew, unlimited |
+| `key_renewed` | api.ts renew (same key, no mint) | proxyId, via |
+| `limits_loosened` / `limits_tightened` | api.ts limits PATCH (uses `isLoosening`) | proxyId, via, before, after (text summaries) |
+| `auto_renew_enabled` | issue/env or a limits change that turns it on | proxyId, via, window, maxLifetime (seconds) |
+| `credential_added` / `credential_changed` / `credential_removed` | api.ts | name, provider, baseUrlHost, via; changed adds fields, keyReplaced, baseUrlChanged |
+| `credentials_imported` | api.ts import (not dry runs) | count, via |
+
+`via` comes from the `x-wickey-via: cli` request header the CLI sets (anything else counts as
+`dashboard`); `setUp`/`unlock` called in a terminal default to `terminal`, and the setup link
+passes `setup_link`. It is a display label: a local program can send any value, so it is not proof.
+Logging is a record, not a gate (`logEvent`): a failed write never blocks unlock, sign-in or lock
+(silent), and for minting and credential changes it prints one line to stderr and carries on.
 
 ### vault.json (mode 600, written by atomic rename)
 

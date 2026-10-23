@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { BRAND, envVar } from './brand.ts';
+import { logEvent, type Via } from './audit.ts';
 import { humanRequired } from './human.ts';
 import { signExistingRows, listCredentials } from './store.ts';
 import { WrongPassphraseError, changePassphrase as rewrapVault, createVault, getSecret, isUnlocked, unlockVault, vaultExists, verifyPassphrase } from './vault.ts';
@@ -23,12 +24,21 @@ export class TooManyAttemptsError extends Error {
   }
 }
 
+// The throttle window (identified by its end time) already reported to the event log.
+let throttleLogged = 0;
+
 function checkThrottle(): void {
   const wait = Math.ceil((blockedUntil - Date.now()) / 1000);
-  if (wait > 0) throw new TooManyAttemptsError(wait);
+  if (wait <= 0) return;
+  // Once per window, not per refused attempt: a guessing loop must not flood the log.
+  if (throttleLogged !== blockedUntil) {
+    throttleLogged = blockedUntil;
+    logEvent('passphrase_throttled', {});
+  }
+  throw new TooManyAttemptsError(wait);
 }
 
-function recordAttempt<T>(fn: () => T): T {
+function recordAttempt<T>(via: Via, fn: () => T): T {
   checkThrottle();
   try {
     const result = fn();
@@ -36,6 +46,7 @@ function recordAttempt<T>(fn: () => T): T {
     return result;
   } catch (err) {
     if (err instanceof WrongPassphraseError) {
+      logEvent('unlock_failed', { via });
       failures++;
       if (failures >= 5) blockedUntil = Date.now() + Math.min(300, 2 ** (failures - 5)) * 1000;
     }
@@ -132,9 +143,10 @@ export function clearSessions(): void {
 }
 
 /** Lock: ends the grace period and signs every browser and CLI session out. */
-export function lock(): void {
+export function lock(via: Via = 'dashboard'): void {
   endGrace();
   clearSessions();
+  logEvent('locked', { via });
 }
 
 // Setup over HTTP needs a one-time token that `start` prints as a link. Without it, any local
@@ -156,26 +168,34 @@ export function setupTokenMatches(given: unknown): boolean {
 }
 
 /** Creates the vault, signs any rows that predate it, and starts the grace period. */
-export function setUp(passphrase: string): void {
+export function setUp(passphrase: string, via: Via = 'terminal'): void {
   createVault(passphrase);
+  logEvent('vault_created', { via });
   setupToken = null;
   signExistingRows();
   startGrace();
 }
 
-/** Unlocks the vault (if it isn't already) and starts the grace period. */
-export function unlock(passphrase: string): void {
+/**
+ * Unlocks the vault (if it isn't already) and starts the grace period. `session` is true when the
+ * caller goes on to create a session (dashboard or CLI): then an already-unlocked vault is a sign-in.
+ */
+export function unlock(passphrase: string, via: Via = 'terminal', session = false): void {
   if (!vaultExists()) throw new AuthRequiredError('setup_required', SET_PASSPHRASE);
-  recordAttempt(() => (isUnlocked() ? verifyPassphrase(passphrase) : unlockVault(passphrase)));
+  const wasUnlocked = isUnlocked();
+  recordAttempt(via, () => (wasUnlocked ? verifyPassphrase(passphrase) : unlockVault(passphrase)));
   startGrace();
+  if (!wasUnlocked) logEvent('unlocked', { via });
+  else if (session) logEvent('signed_in', { via });
 }
 
 /** Passphrase check for a sign-in when the vault is already unlocked (a new browser, or the CLI). */
-export function signIn(passphrase: string): void {
+export function signIn(passphrase: string, via: Via = 'dashboard'): void {
   if (!vaultExists()) throw new AuthRequiredError('setup_required', SET_PASSPHRASE);
   if (!isUnlocked()) throw new AuthRequiredError('passphrase_required', UNLOCK_STEP);
-  recordAttempt(() => verifyPassphrase(passphrase));
+  recordAttempt(via, () => verifyPassphrase(passphrase));
   startGrace();
+  logEvent('signed_in', { via });
 }
 
 /**
@@ -183,20 +203,22 @@ export function signIn(passphrase: string): void {
  * program could take over the vault during the window. Wrong guesses count toward the throttle.
  * Ends the grace period, so the next mint asks for the new passphrase.
  */
-export function changePassphrase(current: string, next: string): void {
+export function changePassphrase(current: string, next: string, via: Via = 'dashboard'): void {
   if (!vaultExists()) throw new AuthRequiredError('setup_required', SET_PASSPHRASE);
   if (!isUnlocked()) throw new Error('Wickey is locked. Unlock it with your passphrase first.');
-  recordAttempt(() => rewrapVault(current, next));
+  recordAttempt(via, () => rewrapVault(current, next));
   endGrace();
+  logEvent('passphrase_changed', { via });
 }
 
 /**
  * Gate for anything that mints a key or could redirect a real key: passes with the right
  * passphrase, or without one while the grace period is running.
  */
-export function requireAuth(passphrase?: string): void {
+export function requireAuth(passphrase?: string, via: Via = 'dashboard'): void {
   if (!vaultExists()) throw new AuthRequiredError('setup_required', SET_PASSPHRASE);
-  if (passphrase) return unlock(passphrase);
+  // Not a sign-in (no session is created here), so only a failure or a real unlock is logged.
+  if (passphrase) return unlock(passphrase, via);
   if (isUnlocked() && Date.now() < graceUntil) return;
   throw new AuthRequiredError('passphrase_required', PASSPHRASE_STEP);
 }

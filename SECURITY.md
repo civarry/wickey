@@ -290,7 +290,9 @@ and `verifyLog` reports the first bad entry. Honest limits:
   with no MACs and a fake `reset` at the end is not detectable until the anchor exists.
 - The file is readable by any same-user program; `data` is limited to ids, names and limits, never
   keys, tokens or passphrases. While the vault is locked only hashes and links are checked.
-- Not yet wired to actions: the module and API exist; callers come in a later change.
+- Logging is a record, not a gate: if the file cannot be written, unlock, sign-in and lock still
+  work (silently) and minting or credential changes go ahead with one line on stderr. The `via`
+  field is a label the caller sends; a local program can fake it.
 
 ## Other known limits
 
