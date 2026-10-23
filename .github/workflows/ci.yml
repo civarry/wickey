@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    # Windows support is not verified yet (terminal prompt, PowerShell output), so a failure there
+    # must not block merges until someone has confirmed it works.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npx tsc
+      - run: npm test

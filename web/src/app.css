@@ -1,0 +1,93 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/inter';
+@import '@fontsource-variable/jetbrains-mono';
+
+/* Every colour in the UI is defined here once. Components use the token classes only. */
+@theme {
+  --color-background: #0c0e0f;
+  --color-surface: #131517;
+  --color-surface-2: #16191c;
+  --color-input: #0f1113;
+  --color-border: #22262a;
+  --color-border-strong: #2a2f33;
+  --color-text: #e7e9ea;
+  --color-text-muted: #9aa1a6;
+
+  --color-accent: #5ccf8f;
+  --color-accent-text: #6fdca0;
+  --color-accent-bg: #10201a;
+  --color-accent-border: #1f3d32;
+
+  --color-warn: #e8b04b;
+  --color-warn-text: #f0b955;
+  --color-warn-bg: #1a160d;
+  --color-warn-border: #4a3a1c;
+
+  --color-danger: #e5675a;
+  --color-danger-text: #f08a7c;
+  --color-danger-bg: #1f1210;
+  --color-danger-border: #522a25;
+
+  --color-info: #5b9df5;
+  --color-info-text: #8db7f2;
+  --color-info-bg: #0f1a2b;
+  --color-info-border: #23406b;
+
+  /* Dark text for filled accent, warn and danger buttons (all pass 4.5:1). */
+  --color-ink: #08100b;
+  --color-scrim: rgb(0 0 0 / 0.6);
+
+  --font-sans: 'Inter Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* One radius scale: controls, cards, dialogs. */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  --shadow-pop: 0 12px 40px rgb(0 0 0 / 0.5);
+}
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+  /* Reserve the scrollbar's space even when the page doesn't scroll, so expanding a proxy row
+     (which can make the page scrollable) doesn't shift the centered content sideways. */
+  html {
+    scrollbar-gutter: stable;
+  }
+  html,
+  body {
+    background: var(--color-background);
+    color: var(--color-text);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.45;
+  }
+  button:not(:disabled) {
+    cursor: pointer;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-accent-text);
+    outline-offset: 2px;
+  }
+  ::placeholder {
+    color: var(--color-text-muted);
+    opacity: 0.8;
+  }
+}
+
+/* Never cover an open drawer's Save button: sit beside the drawer (28rem) when there's room for
+   both, otherwise move to the top of the screen. */
+body:has([data-drawer]) [data-toast] {
+  top: 1rem;
+  bottom: auto;
+}
+@media (min-width: 54rem) {
+  body:has([data-drawer]) [data-toast] {
+    top: auto;
+    bottom: 1rem;
+    right: calc(28rem + 1rem);
+  }
+}

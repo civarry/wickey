@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "es2023",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["es2023", "dom", "dom.iterable"],
+    "strict": true,
+    "noEmit": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true,
+    "types": ["svelte", "vite/client"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.svelte", "vite.config.ts"]
+}
