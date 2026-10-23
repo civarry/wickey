@@ -28,6 +28,7 @@ import {
   updateCredential,
   type IssuedProxy,
 } from './store.ts';
+import { listEvents } from './events.ts';
 import { humanRequired } from './human.ts';
 import { isRollbackFlagged } from './metering.ts';
 import { ensureModels, forceRefreshModels } from './models.ts';
@@ -381,6 +382,20 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
     if (isLoosening(existing.limits, next, existing.autoRenew, nextAutoRenew)) auth(body);
     if (body.limits != null) setLimits(existing.id, next);
     return json(res, 200, { proxy: editsAutoRenew ? setAutoRenew(existing.id, nextAutoRenew) : getProxy(existing.id) });
+  }
+
+  // Security event log, newest first, with the integrity summary. Session only: it never holds secrets.
+  if (method === 'GET' && path === '/api/events') {
+    const q = new URL(req.url ?? '', 'http://x').searchParams;
+    const int = (name: string): number | undefined => {
+      const v = q.get(name);
+      if (v === null) return undefined;
+      if (!/^\d{1,15}$/.test(v)) throw new HttpError(400, `${name} must be a whole number.`);
+      return Number(v);
+    };
+    const limit = int('limit');
+    if (limit !== undefined && (limit < 1 || limit > 200)) throw new HttpError(400, 'limit must be between 1 and 200.');
+    return json(res, 200, listEvents({ before: int('before'), limit }));
   }
 
   // Read-only metadata like the per-proxy log below, so no requireAuth.

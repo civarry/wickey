@@ -7,7 +7,7 @@ import { config } from './config.ts';
 // The vault holds the real provider keys, encrypted, in one JSON file that works the same on
 // every OS. A random data key (DK) encrypts everything; the DK itself is stored encrypted under a
 // key derived from the user's passphrase with scrypt, so changing the passphrase later only means
-// re-wrapping the DK. Two subkeys come from the DK: one encrypts secrets, one signs database rows.
+// re-wrapping the DK. Three subkeys come from the DK: one encrypts secrets, one signs database rows, one authenticates the security event log.
 
 interface Box { iv: string; tag: string; data: string }
 interface VaultFile {
@@ -16,7 +16,7 @@ interface VaultFile {
   dk: Box;
   secrets: Record<string, Box>;
 }
-interface Keys { dk: Buffer; enc: Buffer; mac: Buffer }
+interface Keys { dk: Buffer; enc: Buffer; mac: Buffer; events: Buffer }
 
 export const MIN_PASSPHRASE = 12;
 
@@ -57,7 +57,7 @@ function kek(passphrase: string, kdf: VaultFile['kdf']): Buffer {
 
 function subkeys(dk: Buffer): Keys {
   const derive = (info: string) => Buffer.from(hkdfSync('sha256', dk, Buffer.alloc(0), info, 32));
-  return { dk, enc: derive(`${BRAND.cryptoContext}/secrets`), mac: derive(`${BRAND.cryptoContext}/records`) };
+  return { dk, enc: derive(`${BRAND.cryptoContext}/secrets`), mac: derive(`${BRAND.cryptoContext}/records`), events: derive(`${BRAND.cryptoContext}/events`) };
 }
 
 function read(): VaultFile {
@@ -179,5 +179,17 @@ export function verifySignature(data: string, signature: string | null): boolean
   if (!signature) return false;
   const expected = Buffer.from(sign(data), 'hex');
   const given = Buffer.from(signature, 'hex');
+  return given.length === expected.length && timingSafeEqual(given, expected);
+}
+
+/** HMAC over an event-log entry hash. Its own subkey, so a row signature can never pass as an event MAC. */
+export function eventMac(hash: string): string {
+  return createHmac('sha256', requireKeys().events).update(hash).digest('hex');
+}
+
+export function verifyEventMac(hash: string, mac: string | null): boolean {
+  if (!mac) return false;
+  const expected = Buffer.from(eventMac(hash), 'hex');
+  const given = Buffer.from(mac, 'hex');
   return given.length === expected.length && timingSafeEqual(given, expected);
 }

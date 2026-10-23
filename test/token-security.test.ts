@@ -114,6 +114,7 @@ const ROUTES: [string, string][] = [
   ['POST', '/api/credentials/work/models/refresh'],
   ['POST', '/api/proxies'],
   ['PATCH', '/api/proxies/abcd1234/limits'],
+  ['GET', '/api/events'],
   ['GET', '/api/requests'],
   ['GET', '/api/proxies/abcd1234/requests'],
   ['POST', '/api/proxies/abcd1234/renew'],

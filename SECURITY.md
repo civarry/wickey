@@ -270,6 +270,28 @@ Accepted:
   discarded rather than sent to journald, so journald's limits do not apply.
 - Windows start-on-login is experimental and unverified.
 
+## Security event log (`events.log`)
+
+An append-only, hash-chained file of security events with an HMAC (under a key derived from the
+vault's data key) on entries written while unlocked. It exists so a same-user program without the
+passphrase cannot quietly edit, delete, reorder or forge events: those break the chain or the MACs,
+and `verifyLog` reports the first bad entry. Honest limits:
+
+- **Truncating the tail is not detected.** Removing the newest entries leaves a consistent chain.
+  An anchor outside the data directory is planned to close this.
+- **Entries written while locked (failed unlocks) carry no MAC.** A local program could add such
+  entries. They are shown as "recorded while locked" and only become part of the authenticated
+  chain when the next unlock appends a checkpoint; they are never presented as verified. The
+  checkpoint signs whatever unsigned chain precedes it, so until the anchor exists, a program that
+  rewrites the log as unsigned entries gets that rewrite folded in at the next unlock. The anchor
+  must be checked before any checkpoint is written.
+- **Entries from before a `wickey reset` cannot have their MACs checked** (the key is gone). They
+  are labelled "before reset, integrity not verifiable". A program that rewrites the whole file
+  with no MACs and a fake `reset` at the end is not detectable until the anchor exists.
+- The file is readable by any same-user program; `data` is limited to ids, names and limits, never
+  keys, tokens or passphrases. While the vault is locked only hashes and links are checked.
+- Not yet wired to actions: the module and API exist; callers come in a later change.
+
 ## Other known limits
 
 - A key you put in your shell environment (`wickey env`, or one you exported yourself) is

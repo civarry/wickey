@@ -12,6 +12,7 @@ export const BRAND = {
   /** Data directory under the user's home. */
   dataDirName: '.wickey',
   dbFileName: 'wickey.db',
+  eventsFileName: 'events.log',
   /** Prefix of every configuration environment variable (HOME, PORT, GRACE, ...). */
   envPrefix: 'WICKEY_',
   launchdLabel: 'dev.wickey.proxy',

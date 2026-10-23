@@ -14,6 +14,7 @@ dependencies.
 | `src/api.ts` | Dashboard page and `/api/*`, with Host, Origin and header checks |
 | `src/session.ts` | Setup, unlock, sign-in, in-memory sessions, grace period, `requireAuth`, wrong-passphrase throttle |
 | `src/vault.ts` | Encrypted `vault.json`, the in-memory keys, row-signing HMAC |
+| `src/events.ts` | Security event log (`events.log`): hash-chained, MAC-authenticated JSON Lines, `verifyLog`, `listEvents`, `checkpoint`. Not yet called from session/api/cli actions |
 | `src/store.ts` | SQLite (`node:sqlite`): credentials, proxies, usage totals, request log, row signatures, issue/renew/rotate, limits, auto-renew |
 | `src/metering.ts` | Usage parsing (JSON and SSE, OpenAI and Anthropic shapes), the decoded response side copy, rate limiter, in-flight reservations, usage high-water marks, error bodies in OpenAI or Anthropic format |
 | `src/prompt.ts` | Hidden passphrase prompt (and a visible one for confirmations) via `/dev/tty` or `CONIN$` |
@@ -171,6 +172,23 @@ locked), and stdout/stderr are replaced by a `RotatingLog` at `logs/wickey.log` 
 OS-level streams point at `/dev/null`. Tests override the label (`WICKEY_SERVICE_LABEL`), the
 definition directory (`WICKEY_SERVICE_DIR`), the platform (`WICKEY_SERVICE_PLATFORM`) and
 dry-run mode (`WICKEY_SERVICE_DRYRUN=1`).
+
+### events.log (mode 600, append-only)
+
+One JSON object per line: `{ seq, ts, type, data, prev, hash, mac }`. `hash` is SHA-256 over a
+canonical (sorted-key) JSON of `{seq, ts, type, data, prev}`; `prev` is the previous entry's hash
+(a fixed genesis string for the first). `mac` is HMAC-SHA256 of `hash` under a third HKDF subkey of
+the data key (`.../events`, `eventMac` / `verifyEventMac` in `vault.ts`), or `null` when the vault
+was locked. Writes use `O_APPEND` and never rewrite the file. Entries made while locked stay
+unsigned until the next unlock, when `checkpoint()` appends a signed `checkpoint` entry; because of
+the chain, its MAC authenticates everything before it. `verifyLog()` recomputes hashes, links and
+sequence numbers and checks every MAC while unlocked. `data` holds ids, names and limits only.
+
+`wickey reset` keeps this file and appends an unsigned `reset` entry. The old key is gone, so older
+MACs are reported as `before_reset` (not verifiable), not as tampering. A real reset fails every old
+MAC; a mix of passing and failing old MACs before a `reset` is reported as tampering (someone
+inserting a fake reset). `GET /api/events?before=<seq>&limit=<n>` (session required, default 50,
+max 200, newest first) returns entries with a `trust` field plus the `verifyLog` summary.
 
 ### vault.json (mode 600, written by atomic rename)
 

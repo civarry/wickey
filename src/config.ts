@@ -9,6 +9,7 @@ export function config() {
   return {
     home,
     dbPath: path.join(home, BRAND.dbFileName),
+    eventsFile: path.join(home, BRAND.eventsFileName),
     logsDir,
     logFile: path.join(logsDir, BRAND.logFileName),
     host: '127.0.0.1',

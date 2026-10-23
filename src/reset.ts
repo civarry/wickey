@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { config } from './config.ts';
+import { appendEvent } from './events.ts';
 
 // Forgot-passphrase path. There is no recovery by design, so the only way out is to delete the
 // vault and start over. This lives in the CLI only: an HTTP endpoint for it would let any local
@@ -57,12 +58,16 @@ export async function isProxyRunning(): Promise<boolean> {
 /**
  * Deletes the vault and the database. The database file is removed (not emptied) so the schema
  * and its migrations are simply recreated on the next start. The directory stays.
+ * events.log is kept on purpose: a reset is exactly when a trail matters. It gets a `reset` entry
+ * without a MAC (the old events key is gone with the vault).
  */
 export function performReset(): void {
   const { home, dbPath } = config();
+  const plan = planReset();
   const targets = [path.join(home, 'vault.json'), dbPath, `${dbPath}-wal`, `${dbPath}-shm`];
   if (fs.existsSync(home)) {
     for (const f of fs.readdirSync(home)) if (/^vault\.json\..*\.tmp$/.test(f)) targets.push(path.join(home, f));
   }
   for (const t of targets) fs.rmSync(t, { force: true });
+  appendEvent('reset', { credentials: plan.credentials.length, proxies: plan.proxies }, { signed: false });
 }
