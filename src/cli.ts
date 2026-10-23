@@ -189,7 +189,7 @@ async function approvalHint(action: PresenceAction): Promise<void> {
 async function askPassphrase(): Promise<string> {
   const passphrase = await promptHidden('Wickey passphrase: ');
   if (passphrase === null) return failAfterSignOut(noTerminalMessage());
-  if (!passphrase) return failAfterSignOut('Cancelled.');
+  if (!passphrase) return failAfterSignOut('No passphrase entered, so nothing was done.');
   return passphrase;
 }
 
@@ -470,7 +470,7 @@ async function main(argv: string[]): Promise<void> {
       if (values.recovery) {
         if (!hasTerminal()) fail(humanRequired(`run \`${commandLine()}\` in their own terminal (the dashboard cannot take a recovery code)`));
         const code = await promptHidden('Recovery code: ');
-        if (!code) fail('Cancelled.');
+        if (!code) fail('No recovery code entered, so nothing was done.');
         const res = await send('POST', '/api/unlock', { recovery: code }, null);
         const data = await res.json().catch(() => ({}));
         cli.cookie = cookieFrom(res);
@@ -481,7 +481,7 @@ async function main(argv: string[]): Promise<void> {
       }
       const passphrase = await promptHidden('Wickey passphrase: ');
       if (passphrase === null) fail(noTerminalMessage());
-      if (!passphrase) fail('Cancelled.');
+      if (!passphrase) fail('No passphrase entered, so nothing was done.');
       await approvalHint('unlock vault');
       // Unlock hands back a session, which this command has no use for.
       const res = await send('POST', '/api/unlock', { passphrase }, null);
@@ -511,7 +511,7 @@ async function main(argv: string[]): Promise<void> {
       if (!hasTerminal()) fail(humanRequired(`run \`${commandLine()}\` in their own terminal`));
       if (!vaultExists()) fail(`There is no vault yet. Run \`${BRAND.command} setup\` first.`);
       const passphrase = await promptHidden('Wickey passphrase: ');
-      if (!passphrase) fail('Cancelled.');
+      if (!passphrase) fail('No passphrase entered, so nothing was done.');
       const showCode = (code: string, header: string) => {
         console.log(`\n${header}\n\n  ${code}\n`);
         console.log('It opens the vault if the Secure Enclave key is ever lost. It is shown only this once and Wickey keeps no copy.');
@@ -519,8 +519,9 @@ async function main(argv: string[]): Promise<void> {
       };
       try {
         if (arg === 'enable') {
-          console.log(`macOS will ask you to approve a system prompt that says "${presenceReason('turn on presence', 'terminal')}". Approve it with Touch ID, your login password or Apple Watch.`);
-          const { recoveryCode } = await enablePresenceMode(passphrase);
+          // Announced only once the passphrase checked out: a typo must not read like a promise of a prompt that never comes.
+          const { recoveryCode } = await enablePresenceMode(passphrase, 'terminal', () =>
+            console.log(`macOS will ask you to approve a system prompt that says "${presenceReason('turn on presence', 'terminal')}". Approve it with Touch ID, your login password or Apple Watch.`));
           console.log('Presence mode is on. Unlocking Wickey now needs your passphrase and an approval on this Mac.');
           console.log('One rule: only approve a Wickey prompt right after you clicked Unlock or ran a wickey command. Any program on this computer can raise the same prompt, and approving it proves you said yes, not that Wickey asked.');
           showCode(recoveryCode, 'Your recovery code:');

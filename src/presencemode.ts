@@ -141,7 +141,8 @@ function wrongPassphrase(via: Via): never {
 }
 
 /** Turns presence on. Returns the recovery code, to be shown once by the caller and never kept. Nothing changes on failure. */
-export async function enablePresenceMode(passphrase: string, via: Via = 'terminal'): Promise<{ recoveryCode: string }> {
+/** `beforePrompt` runs once the passphrase checked out and the helper is ready, right before the system prompt. */
+export async function enablePresenceMode(passphrase: string, via: Via = 'terminal', beforePrompt?: () => void): Promise<{ recoveryCode: string }> {
   if (!vaultExists()) throw new Error(`There is no vault yet. Run \`${BRAND.command} setup\` first.`);
   if (presenceConfig()) throw new Error(`Presence mode is already on. \`${BRAND.command} presence status\` shows its state.`);
   try { verifyPassphrase(passphrase); } catch (err) { if (err instanceof WrongPassphraseError) wrongPassphrase(via); throw err; }
@@ -161,6 +162,7 @@ export async function enablePresenceMode(passphrase: string, via: Via = 'termina
   const undo = async () => { await deleteKey(keyDir, { expectedSha256: hash }).catch(() => {}); };
   try {
     await createKey(keyDir, { expectedSha256: hash });
+    beforePrompt?.();
     const secret = await useRef({ helperSha256: hash, keyDir }, 'turn on presence', via);
     const recoveryCode = newRecoveryCode();
     try {

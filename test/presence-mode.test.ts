@@ -83,7 +83,10 @@ test('old vaults (no presence block) keep the passphrase-only format and behavio
 });
 
 test('enable refuses on a wrong passphrase and changes nothing', async () => {
-  await assert.rejects(pm.enablePresenceMode('not the passphrase at all'), vault.WrongPassphraseError);
+  // The CLI announces the prompt from this callback, so a typo must never reach it.
+  let announced = 0;
+  await assert.rejects(pm.enablePresenceMode('not the passphrase at all', 'terminal', () => announced++), vault.WrongPassphraseError);
+  assert.equal(announced, 0, 'a wrong passphrase must not announce a prompt');
   assert.equal(readVault().presence, undefined);
   assert.equal(fake.uses().length, 0);
 });
@@ -104,7 +107,9 @@ test('enable: the passphrase alone no longer opens the vault; the recovery code 
   const seq = lastSeq();
   sent.length = 0;
   notify.resetNotifyState();
-  const r = await pm.enablePresenceMode(PASS);
+  let usesWhenAnnounced = -1;
+  const r = await pm.enablePresenceMode(PASS, 'terminal', () => { usesWhenAnnounced = fake.uses().length; });
+  assert.equal(usesWhenAnnounced, 0, 'announced once, right before the prompt');
   recovery = r.recoveryCode;
   assert.match(recovery, /^([A-Z2-7]{4}-){7}[A-Z2-7]{4}$/); // 160 bits
   assert.deepEqual(fake.uses(), ['Wickey: turn on presence (terminal)']);
