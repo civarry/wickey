@@ -11,7 +11,7 @@
   let value = $state('');
 
   const body = $derived(
-    app.session?.graceSeconds
+    req?.purpose ? req.purpose : app.session?.graceSeconds
       ? `Needed to mint keys or change credentials. Afterwards, minting stays unlocked for ${duration(app.session.graceSeconds)}.`
       : 'Needed to mint keys or change credentials.',
   );

@@ -89,13 +89,13 @@ test('a passphrase set in a terminal says so', () => {
 const NOTIFYING: [string, Record<string, string | number | boolean | null>, string[]][] = [
   ['unlocked', { via: 'dashboard' }, ['Wickey was unlocked from the dashboard.', 'If this wasn\'t you: run `wickey lock`']],
   ['passphrase_changed', { via: 'cli' }, ['The passphrase was changed from the command line.', '`wickey reset`']],
-  ['reset', { credentials: 2, proxies: 3 }, ['Wickey was reset', 'rotate your real provider keys']],
+  ['reset', { credentials: 2, proxies: 3 }, ['Wickey was reset', 'rotate your real provider keys', '`wickey events`']],
   ['passphrase_throttled', {}, ['Several wrong passphrases', '`wickey lock`']],
   ['key_issued', { proxyId: 'ab12cd34', credential: 'work', label: 'ci-runner', via: 'cli', op: 'issue', models: 3, unlimited: true }, ['A key with no limits was issued: "ci-runner" (proxy ab12cd34, from the command line).', 'run `wickey expire ab12cd34`']],
   ['key_issued', { proxyId: 'ef56ab78', credential: 'work', label: 'agent', via: 'dashboard', op: 'env', models: 'all', unlimited: false }, ['A key for all models was issued: "agent" (proxy ef56ab78, from the dashboard).', 'run `wickey expire ef56ab78`']],
   ['limits_loosened', { proxyId: 'ab12cd34', via: 'dashboard', before: 'x', after: 'y' }, ['Limits were loosened on proxy ab12cd34', 'run `wickey expire ab12cd34`']],
   ['auto_renew_enabled', { proxyId: 'ab12cd34', via: 'cli', window: 60, maxLifetime: 600 }, ['Auto-renew was turned on for proxy ab12cd34', '`wickey limits ab12cd34 --no-auto-renew`']],
-  ['tamper_detected', { anchor: 'truncated', foundSeq: 3 }, ['signs of tampering', 'the event log failed its anchor check (truncated)', 'check the security event log', 'rotate your keys']],
+  ['tamper_detected', { anchor: 'truncated', foundSeq: 3 }, ['signs of tampering', 'the event log failed its anchor check (truncated)', '`wickey events`', 'Events page of the dashboard', 'rotate your keys']],
   ['tamper_detected', { what: 'notification settings' }, ['signs of tampering: notification settings.']],
   ['notifications_changed', { type: 'unlocked', enabled: false, via: 'cli' }, ['Notifications for "unlocked" were turned off from the command line.', '`wickey notifications on unlocked`']],
 ];

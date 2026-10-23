@@ -1,3 +1,5 @@
+import type { Trust } from '../../../src/eventtext.ts';
+
 export type AuthStyle = 'bearer' | 'x-api-key';
 export type ProxyStatus = 'active' | 'expired';
 
@@ -211,7 +213,7 @@ export class ApiError extends Error {
 }
 
 /** Resolves with the passphrase, or null if the user cancelled. `reason` is shown after a wrong try. */
-export type PassphraseAsker = (reason: string) => Promise<string | null>;
+export type PassphraseAsker = (reason: string, purpose?: string) => Promise<string | null>;
 let asker: PassphraseAsker | null = null;
 let onSettled: (() => void) | null = null;
 /** Requests currently waiting on or retrying with the passphrase prompt. */
@@ -259,7 +261,7 @@ async function plain<T>(method: string, path: string, body?: object): Promise<T>
 }
 
 /** When the server wants the passphrase, ask for it and retry; the prompt stays open on a wrong one. */
-async function request<T>(method: string, path: string, body?: object): Promise<T> {
+async function request<T>(method: string, path: string, body?: object, purpose?: string): Promise<T> {
   let r = await raw(method, path, body);
   let reason = '';
   let asked = false;
@@ -270,7 +272,7 @@ async function request<T>(method: string, path: string, body?: object): Promise<
         asked = true;
         askers++;
       }
-      const passphrase = await asker(reason);
+      const passphrase = await asker(reason, purpose);
       if (passphrase === null) throw new Cancelled();
       r = await raw(method, path, { ...(body ?? {}), passphrase });
       reason = r.data.error?.code === 'wrong_passphrase' ? 'Wrong passphrase. Try again.' : '';
@@ -325,3 +327,58 @@ export const deleteProxy = (id: string) => request<{ ok: true }>('DELETE', `/api
 /** Uses the stored key upstream, so it can answer 409 when locked. Never mints anything. */
 export const getModels = (name: string) => request<ModelList>('GET', `/api/credentials/${encodeURIComponent(name)}/models`);
 export const refreshModels = (name: string) => request<ModelList>('POST', `/api/credentials/${encodeURIComponent(name)}/models/refresh`, {});
+
+// ---- Security events ----
+
+export interface EventEntry {
+  seq: number;
+  ts: string;
+  type: string;
+  data: Record<string, unknown>;
+  trust: Trust;
+}
+
+export interface LogSummary {
+  ok: boolean;
+  entries: number;
+  firstBadSeq?: number;
+  reason?: string;
+  macsChecked: boolean;
+  beforeReset: number;
+  whileLocked: number;
+  notes: string[];
+}
+
+export interface EventsPage {
+  events: EventEntry[];
+  summary: LogSummary;
+  head: number;
+  /** The "last seen" marker, 0 when there is none (or its row failed its signature). */
+  seen: number;
+  seenState: 'ok' | 'missing' | 'tampered' | 'unverified' | 'mismatch';
+  /** Banner buckets for entries newer than `seen`. */
+  unseen: Record<string, number>;
+}
+
+export const getEvents = (q: { type?: string; before?: number; limit?: number } = {}) => {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries(q)) if (v !== undefined && v !== '') p.set(k, String(v));
+  return request<EventsPage>('GET', `/api/events?${p}`);
+};
+/** Moves the marker up to `seq` (the newest event the person was shown). It never moves on sign-in. */
+export const markEventsSeen = (seq: number) => request<{ seen: number }>('POST', '/api/events/seen', { seq });
+
+export interface NotificationType {
+  type: string;
+  label: string;
+  enabled: boolean;
+  locked: boolean;
+}
+export interface NotificationSettings {
+  types: NotificationType[];
+  backend: { name: string; available: boolean; reason?: string };
+}
+export const getNotifications = () => request<NotificationSettings>('GET', '/api/notifications');
+/** Turning one off needs the passphrase even in the grace period: the server answers 401 and `request` asks for it. */
+export const setNotification = (type: string, enabled: boolean) =>
+  request<NotificationSettings>('PATCH', '/api/notifications', { type, enabled }, enabled ? undefined : 'Needed to turn off an alert. Alerts are how you hear about someone else acting on your behalf.');

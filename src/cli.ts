@@ -12,6 +12,7 @@ import { runServiceCommand } from './service.ts';
 import { VIA_HEADER } from './audit.ts';
 import { graceSeconds, openSetup, setUp, unlock } from './session.ts';
 import { runSetup } from './setup.ts';
+import { eventLine, integrityText, TYPE_LABEL } from './eventtext.ts';
 import { currentNotifier } from './notify.ts';
 import { getProxy, listCredentials, listProxies, type Limits, type Proxy } from './store.ts';
 import { DEFAULT_TTL_SECONDS, formatDuration, parseTtl } from './ttl.ts';
@@ -32,6 +33,10 @@ Server
   unlock                 Unlock a running proxy and start the grace period
   lock                   End the grace period now and sign every session out (no passphrase needed)
   passphrase             Change the passphrase (asks for the current one even during the grace period)
+  events [--all] [--type <t>] [--json]
+                         Show security events (unlocks, failed passphrases, keys without limits, tampering...),
+                         newest first, with whether each can be trusted. 20 by default; --all shows every one.
+                         --type keeps one event type, e.g. unlock_failed. Same list as the dashboard's Events page.
   notifications          Desktop alerts for security events (unlock, passphrase change, unlimited keys, tampering...).
   notifications off <type>   Turn one type off. Asks for the passphrase in a terminal, even during the grace period.
   notifications on <type>    Turn one type back on.
@@ -395,6 +400,7 @@ async function main(argv: string[]): Promise<void> {
       powershell: { type: 'boolean' },
       json: { type: 'boolean' },
       all: { type: 'boolean' },
+      type: { type: 'string' },
       key: { type: 'boolean' },
       credential: { type: 'string' },
       models: { type: 'string' },
@@ -508,6 +514,40 @@ async function main(argv: string[]): Promise<void> {
         ...data.types.map((t: any) => [t.type, t.enabled ? (t.locked ? 'on (always)' : 'on') : 'off', t.label]),
       ]));
       console.log(data.backend.available ? `\nShown through ${data.backend.name}.` : `\nNo desktop notifications can be shown here: ${data.backend.reason ?? 'no backend'}`);
+      return;
+    }
+
+    case 'events': {
+      const type = values.type;
+      if (type !== undefined && !/^[a-z][a-z0-9_]{0,63}$/.test(type)) fail(`--type must be an event type such as unlock_failed. Known types: ${Object.keys(TYPE_LABEL).join(', ')}.`);
+      const want = values.all ? Infinity : 20;
+      const events: any[] = [];
+      let summary: any;
+      let before: number | undefined;
+      let seen = 0;
+      while (events.length < want) {
+        const q = new URLSearchParams({ limit: String(Math.min(200, want - events.length)) });
+        if (type) q.set('type', type);
+        if (before !== undefined) q.set('before', String(before));
+        const page = await call('GET', `/api/events?${q}`);
+        summary ??= page.summary;
+        seen = page.seen;
+        events.push(...page.events);
+        if (page.events.length === 0 || page.events.length < Number(q.get('limit'))) break;
+        before = page.events[page.events.length - 1].seq;
+      }
+      if (values.json) {
+        console.log(JSON.stringify({ summary, seen, events }, null, 2));
+        return;
+      }
+      const integrity = integrityText(summary);
+      console.log(`${integrity.ok ? 'OK' : 'PROBLEM'}: ${integrity.text}`);
+      if (integrity.next) console.log(integrity.next);
+      if (summary.whileLocked > 0) console.log(`${summary.whileLocked} entr${summary.whileLocked === 1 ? 'y was' : 'ies were'} recorded while locked, so they carry no signature.`);
+      console.log('');
+      if (events.length === 0) console.log(type ? `No "${type}" events yet.` : 'No events yet.');
+      for (const e of events) console.log(`${e.seq > seen ? '* ' : '  '}${eventLine(e)}`);
+      if (events.length) console.log(`\n${events.length} shown, newest first. "*" marks events newer than the last one marked as seen in the dashboard.${values.all ? '' : ' Use --all for everything.'}`);
       return;
     }
 

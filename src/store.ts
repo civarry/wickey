@@ -176,6 +176,14 @@ function open(): DatabaseSync {
       disabled TEXT NOT NULL,
       sig TEXT
     );
+    -- The dashboard's "since your last visit" marker (one row, id 1): the newest event seq the
+    -- person has marked as seen. Signed; a row that fails its signature counts as no marker.
+    CREATE TABLE IF NOT EXISTS event_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      seen_seq INTEGER NOT NULL,
+      seen_hash TEXT NOT NULL DEFAULT '',
+      sig TEXT
+    );
   `);
   const columns = db.prepare('PRAGMA table_info(proxies)').all().map((c) => c.name);
   // Only the hash of a proxy key is kept; the key itself is shown once, at issue or rotate. The
@@ -376,6 +384,13 @@ function resignNotifySettings(): void {
   const row = open().prepare('SELECT * FROM notification_settings WHERE id = 1').get() as Record<string, any>;
   open().prepare('UPDATE notification_settings SET sig = ? WHERE id = 1').run(sign(notifySigData(row.disabled)));
 }
+function seenSigData(seq: number, hash: string): string {
+  return ['events-seen', 'v1', seq, hash].join('|');
+}
+function resignEventSettings(): void {
+  const row = open().prepare('SELECT * FROM event_settings WHERE id = 1').get() as Record<string, any>;
+  open().prepare('UPDATE event_settings SET sig = ? WHERE id = 1').run(sign(seenSigData(row.seen_seq, row.seen_hash)));
+}
 function resignCredential(id: string): void {
   const row = open().prepare('SELECT * FROM credentials WHERE id = ?').get(id) as Record<string, any>;
   open().prepare('UPDATE credentials SET sig = ? WHERE id = ?').run(sign(credentialSigData(row)), id);
@@ -431,6 +446,9 @@ export function resignAllRows(): void {
     }
     for (const r of d.prepare('SELECT * FROM notification_settings').all() as Record<string, any>[]) {
       d.prepare('UPDATE notification_settings SET sig = ? WHERE id = 1').run(sign(notifySigData(r.disabled)));
+    }
+    for (const r of d.prepare('SELECT * FROM event_settings').all() as Record<string, any>[]) {
+      d.prepare('UPDATE event_settings SET sig = ? WHERE id = 1').run(sign(seenSigData(r.seen_seq, r.seen_hash)));
     }
     d.exec('COMMIT');
   } catch (err) {
@@ -1131,4 +1149,28 @@ export function writeNotificationSettings(disabled: string[]): void {
   const list = [...new Set(disabled)].sort().join(',');
   open().prepare('INSERT INTO notification_settings (id, disabled) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET disabled = excluded.disabled').run(list);
   resignNotifySettings();
+}
+
+// ---- Events "last seen" marker (signed) ----
+
+export type SeenRead =
+  | { state: 'ok'; seq: number; hash: string }
+  | { state: 'missing' } // never marked: everything counts as new
+  | { state: 'tampered' } // fails its signature: treated as no marker
+  | { state: 'unverified' }; // locked, so the signature cannot be checked
+
+/** Never creates the database (a fresh install or a reset has none, which means no marker). */
+export function readEventsSeen(): SeenRead {
+  if (!fs.existsSync(config().dbPath)) return { state: 'missing' };
+  const row = open().prepare('SELECT * FROM event_settings WHERE id = 1').get() as Record<string, any> | undefined;
+  if (!row) return { state: 'missing' };
+  if (!isUnlocked()) return { state: 'unverified' };
+  if (!Number.isInteger(row.seen_seq) || !verifySignature(seenSigData(row.seen_seq, row.seen_hash), row.sig ?? null)) return { state: 'tampered' };
+  return { state: 'ok', seq: row.seen_seq, hash: row.seen_hash };
+}
+
+/** Sets the marker (the entry's seq and hash, so a rewritten or cut-back log invalidates it) and re-signs. Writing over a tampered row is fine: it only ever hid "new" counts, and a bad one already counts as none. */
+export function writeEventsSeen(seq: number, hash: string): void {
+  open().prepare('INSERT INTO event_settings (id, seen_seq, seen_hash) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET seen_seq = excluded.seen_seq, seen_hash = excluded.seen_hash').run(seq, hash);
+  resignEventSettings();
 }

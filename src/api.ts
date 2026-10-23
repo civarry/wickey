@@ -32,7 +32,8 @@ import {
   type Proxy,
 } from './store.ts';
 import { VIA_HEADER, logEvent, viaFromHeader, type Via } from './audit.ts';
-import { listEvents, type EventData } from './events.ts';
+import { entryHash, listEvents, type EventData } from './events.ts';
+import { readEventsSeen, writeEventsSeen, type SeenRead } from './store.ts';
 import { humanRequired } from './human.ts';
 import { isLockedOn, isNotifyType, notificationSettings, setNotificationEnabled } from './notify.ts';
 import { isRollbackFlagged } from './metering.ts';
@@ -222,6 +223,22 @@ function limitsText(l: Limits, ar: AutoRenew | null): string {
 
 function baseUrlHost(baseUrl: string): string {
   try { return new URL(baseUrl).host; } catch { return ''; }
+}
+
+let seenTamperLogged = false;
+/** The marker as a number. A row that fails its signature, or is missing, is no marker (0): an edit can never hide events. */
+function seenMarker(): { seq: number; hash: string; state: SeenRead['state'] } {
+  let r: SeenRead;
+  try {
+    r = readEventsSeen();
+  } catch {
+    return { seq: 0, hash: '', state: 'missing' };
+  }
+  if (r.state === 'tampered' && !seenTamperLogged) {
+    seenTamperLogged = true;
+    logEvent('tamper_detected', { what: 'last-seen marker' });
+  }
+  return { seq: r.state === 'ok' ? r.seq : 0, hash: r.state === 'ok' ? r.hash : '', state: r.state };
 }
 
 function credentialInfo(c: { name: string; provider: string; baseUrl: string }): EventData {
@@ -465,7 +482,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
     return json(res, 200, notificationSettings());
   }
 
-  // Security event log, newest first, with the integrity summary. Session only: it never holds secrets.
+  // Security event log, newest first, with the integrity summary and the "last seen" marker. Session only: it never holds secrets.
   if (method === 'GET' && path === '/api/events') {
     const q = new URL(req.url ?? '', 'http://x').searchParams;
     const int = (name: string): number | undefined => {
@@ -476,7 +493,29 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
     };
     const limit = int('limit');
     if (limit !== undefined && (limit < 1 || limit > 200)) throw new HttpError(400, 'limit must be between 1 and 200.');
-    return json(res, 200, listEvents({ before: int('before'), limit }));
+    const type = q.get('type') ?? undefined;
+    if (type !== undefined && !/^[a-z][a-z0-9_]{0,63}$/.test(type)) throw new HttpError(400, 'type must be an event type such as "unlocked".');
+    const mark = seenMarker();
+    const page = listEvents({ before: int('before'), limit, type, seen: mark.state === 'ok' ? { seq: mark.seq, hash: mark.hash } : undefined });
+    // 'mismatch': the marker is fine but the log under it is not (cut back or rewritten), so everything counts as new again.
+    return json(res, 200, { ...page, seenState: page.seenMismatch ? 'mismatch' : mark.state });
+  }
+
+  // Moves the "last seen" marker. Only this route does: signing in never does, because the CLI signs
+  // in on every command and would hide exactly what the person needs to see. It never moves backwards.
+  if (method === 'POST' && path === '/api/events/seen') {
+    const body = await readJson(req, ['seq']);
+    const mark = seenMarker();
+    const asSeen = (m: { seq: number; hash: string }) => ({ seq: m.seq, hash: m.hash });
+    const page = listEvents({ limit: 1, seen: mark.state === 'ok' ? asSeen(mark) : undefined });
+    const seq = body.seq as number;
+    if (!Number.isInteger(body.seq) || seq < 0 || seq > page.head) {
+      throw new HttpError(400, `seq must be a whole number from 0 to ${page.head}, the newest event. Reload the page and try again.`);
+    }
+    // Never backwards, unless the old marker is not usable (missing, edited, or the log changed under it).
+    if (page.seen >= seq && mark.state === 'ok' && !page.seenMismatch) return json(res, 200, { seen: page.seen });
+    writeEventsSeen(seq, entryHash(seq) ?? '');
+    return json(res, 200, { seen: seq });
   }
 
   // Read-only metadata like the per-proxy log below, so no requireAuth.

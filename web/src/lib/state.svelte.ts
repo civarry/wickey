@@ -1,6 +1,6 @@
 import * as api from './api.ts';
 import { ApiError } from './api.ts';
-import type { AppState, ModelList, Proxy, SessionStatus } from './api.ts';
+import type { AppState, EventsPage, ModelList, Proxy, SessionStatus } from './api.ts';
 
 export type ProxyView = 'active' | 'expired';
 
@@ -22,6 +22,8 @@ export interface ToastMessage {
 
 interface PassphraseRequest {
   reason: string;
+  /** Why it is needed, when the default wording (minting, credentials) would be wrong. */
+  purpose?: string;
   /** True after submit, until the server answers. */
   pending: boolean;
   resolve: (value: string | null) => void;
@@ -57,6 +59,10 @@ class AppStore {
    */
   setupToken = $state('');
 
+  /** Newest events summary for the banner (limit 1: the full list lives on the Events page). Null until loaded. */
+  events = $state<EventsPage | null>(null);
+  markingSeen = $state(false);
+
   /** Model lists per credential name, kept for the session so reopening a popover is instant. */
   modelLists = $state<Record<string, ModelEntry>>({});
   private modelFlights = new Map<string, Promise<void>>();
@@ -84,7 +90,7 @@ class AppStore {
   start(): () => void {
     api.setSessionLostHandler(() => void this.refresh());
     api.setPassphraseAsker(
-      (reason) => this.askPassphrase(reason),
+      (reason, purpose) => this.askPassphrase(reason, purpose),
       () => (this.passphraseRequest = null),
     );
     const poll = setInterval(() => void this.refresh(), POLL_MS);
@@ -122,12 +128,14 @@ class AppStore {
       this.now = Date.now();
       this.graceEndsAt = this.now + data.session.graceRemaining * 1000;
       this.connected = true;
+      void this.loadEvents();
     } catch (err) {
       if (err instanceof ApiError && err.code === 'session_required') {
         // No session (first visit, restart, Lock from elsewhere, idle expiry): drop what was loaded and ask who is here.
         try {
           this.gateStatus = await api.sessionStatus();
           this.data = null;
+          this.events = null;
           this.modelLists = {};
           this.connected = true;
         } catch {
@@ -138,6 +146,28 @@ class AppStore {
       }
     } finally {
       this.loaded = true;
+    }
+  }
+
+  /** Best effort: a failure leaves the banner as it was. */
+  async loadEvents(): Promise<void> {
+    try {
+      this.events = await api.getEvents({ limit: 1 });
+    } catch { /* the next poll tries again */ }
+  }
+
+  /** Moves the "last seen" marker to the newest event this tab has been told about. */
+  async markSeen(): Promise<void> {
+    const head = this.events?.head;
+    if (head === undefined || this.markingSeen) return;
+    this.markingSeen = true;
+    try {
+      await api.markEventsSeen(head);
+      await this.loadEvents();
+    } catch (err) {
+      if (!(err instanceof api.Cancelled)) this.toast('Could not mark as seen', (err as Error).message);
+    } finally {
+      this.markingSeen = false;
     }
   }
 
@@ -186,7 +216,7 @@ class AppStore {
     this.confirmRequest = request;
   }
 
-  private askPassphrase(reason: string): Promise<string | null> {
+  private askPassphrase(reason: string, purpose?: string): Promise<string | null> {
     // A retry after a wrong passphrase reuses the open dialog and just re-arms it.
     if (this.passphraseRequest) {
       const current = this.passphraseRequest;
@@ -195,11 +225,12 @@ class AppStore {
         const waiting = current.pending ? null : current.resolve;
         current.resolve = waiting ? (v) => (waiting(v), resolve(v)) : resolve;
         current.reason = reason;
+        current.purpose = purpose;
         current.pending = false;
       });
     }
     return new Promise((resolve) => {
-      this.passphraseRequest = { reason, pending: false, resolve };
+      this.passphraseRequest = { reason, purpose, pending: false, resolve };
     });
   }
 

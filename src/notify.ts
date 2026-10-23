@@ -142,7 +142,7 @@ const clip = (v: unknown, max = 48): string => {
 const VIA_TEXT: Record<string, string> = { dashboard: 'the dashboard', cli: 'the command line', terminal: 'a terminal', setup_link: 'the setup link' };
 const from = (e: EventEntry): string => VIA_TEXT[str(e.data.via)] ?? 'an unknown source';
 const proxyId = (e: EventEntry): string => clip(e.data.proxyId, 32);
-const REVIEW = 'check the security event log (events.log)';
+const REVIEW = `review what happened with ${cmd('events')} or the Events page of the dashboard`;
 
 const SPECS: Record<string, Spec> = {
   vault_created: {

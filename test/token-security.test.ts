@@ -115,6 +115,7 @@ const ROUTES: [string, string][] = [
   ['POST', '/api/proxies'],
   ['PATCH', '/api/proxies/abcd1234/limits'],
   ['GET', '/api/events'],
+  ['POST', '/api/events/seen'],
   ['GET', '/api/notifications'],
   ['PATCH', '/api/notifications'],
   ['GET', '/api/requests'],

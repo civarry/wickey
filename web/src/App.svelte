@@ -2,6 +2,7 @@
   import { onMount, tick } from 'svelte';
   import ActivityIcon from '@lucide/svelte/icons/activity';
   import ArrowLeftRight from '@lucide/svelte/icons/arrow-left-right';
+  import BellRing from '@lucide/svelte/icons/bell-ring';
   import KeyRound from '@lucide/svelte/icons/key-round';
   import Shield from '@lucide/svelte/icons/shield';
   import { app } from './lib/state.svelte.ts';
@@ -9,6 +10,7 @@
   import ChangePassphraseDialog from './lib/components/ChangePassphraseDialog.svelte';
   import Button from './lib/components/Button.svelte';
   import ConfirmDialog from './lib/components/ConfirmDialog.svelte';
+  import EventsBanner from './lib/components/EventsBanner.svelte';
   import GraceBanner from './lib/components/GraceBanner.svelte';
   import PassphraseDialog from './lib/components/PassphraseDialog.svelte';
   import Toast from './lib/components/Toast.svelte';
@@ -16,20 +18,23 @@
   import ProxiesPage from './lib/pages/proxies/ProxiesPage.svelte';
   import ActivityPage from './lib/pages/activity/ActivityPage.svelte';
   import { parseActivity } from './lib/pages/activity/route.ts';
+  import EventsPage from './lib/pages/events/EventsPage.svelte';
+  import { parseEvents } from './lib/pages/events/route.ts';
 
   onMount(() => app.start());
 
   // The hash is the router: `#/activity?...` is the Activity page, `#credentials` scrolls the Proxies page, anything else is Proxies.
   let hash = $state(location.hash);
   const activity = $derived(parseActivity(hash));
-  const section = $derived<'proxies' | 'credentials' | 'activity'>(activity ? 'activity' : hash === '#credentials' ? 'credentials' : 'proxies');
+  const events = $derived(parseEvents(hash));
+  const section = $derived<'proxies' | 'credentials' | 'activity' | 'events'>(activity ? 'activity' : events ? 'events' : hash === '#credentials' ? 'credentials' : 'proxies');
 
   // The Proxies page stays mounted while Activity is open (open rows survive), so a plain anchor jump
   // has nothing to land on until it is shown again. Scroll once it is.
   async function onhash() {
     hash = location.hash;
     await tick();
-    if (parseActivity(hash)) window.scrollTo(0, 0);
+    if (parseActivity(hash) || parseEvents(hash)) window.scrollTo(0, 0);
     else if (hash === '#credentials' || hash === '#proxies') document.getElementById(hash.slice(1))?.scrollIntoView();
   }
 
@@ -42,8 +47,9 @@
     { id: 'proxies' as const, label: 'Proxies', icon: ArrowLeftRight, count: app.data ? app.proxies.filter((p) => !p.cleanedUp).length : null },
     { id: 'credentials' as const, label: 'Credentials', icon: KeyRound, count: app.data ? app.credentials.length : null },
     { id: 'activity' as const, label: 'Activity', icon: ActivityIcon, count: null },
+    { id: 'events' as const, label: 'Events', icon: BellRing, count: app.events && app.events.unseen ? Object.values(app.events.unseen).reduce((n, c) => n + c, 0) || null : null },
   ]);
-  const hrefs = { proxies: '#proxies', credentials: '#credentials', activity: '#/activity' };
+  const hrefs = { proxies: '#proxies', credentials: '#credentials', activity: '#/activity', events: '#/events' };
 </script>
 
 <svelte:window onhashchange={onhash} />
@@ -100,6 +106,13 @@
               Every request that went through a proxy key, newest first. Only metadata is logged: never prompts or responses.
             </p>
           </div>
+        {:else if section === 'events'}
+          <div>
+            <h1 class="text-xl font-semibold">Events</h1>
+            <p class="mt-1 max-w-2xl text-[13px] text-text-muted">
+              Security-relevant things that happened, newest first: unlocks, wrong passphrases, keys, credential changes and tampering. Never keys or passphrases.
+            </p>
+          </div>
         {:else}
           <div id="proxies" class="scroll-mt-4">
             <h1 class="text-xl font-semibold">Proxies</h1>
@@ -110,9 +123,11 @@
         {/if}
 
         <GraceBanner />
+        {#if section !== 'events'}<EventsBanner />{/if}
 
         {#if activity}<ActivityPage proxy={activity.proxy} status={activity.status} />{/if}
-        <div class="flex flex-col gap-4" hidden={section === 'activity'}>
+        {#if events}<EventsPage type={events.type} />{/if}
+        <div class="flex flex-col gap-4" hidden={section === 'activity' || section === 'events'}>
           <ProxiesPage />
         </div>
       </div>

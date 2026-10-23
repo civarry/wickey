@@ -15,6 +15,7 @@ dependencies.
 | `src/session.ts` | Setup, unlock, sign-in, in-memory sessions, grace period, `requireAuth`, wrong-passphrase throttle |
 | `src/vault.ts` | Encrypted `vault.json`, the in-memory keys, row-signing HMAC |
 | `src/events.ts` | Security event log (`events.log`): hash-chained, MAC-authenticated JSON Lines, `verifyLog`, `listEvents`, `checkpoint`, the anchor (`checkAnchor`, `guardAnchor`). `src/keychain.ts` is the macOS Keychain backend (injectable via `setKeychain`). `src/audit.ts` is the call-site helper (`logEvent`, the `via` label); session.ts and api.ts emit the events |
+| `src/eventtext.ts` | Plain-words wording for events (`describeEvent`, trust labels, integrity text, banner buckets `bannerKey`/`summarizeUnseen`). Pure, imported by the CLI, the server and the dashboard so they cannot disagree |
 | `src/notify.ts` | Desktop notifications for security events: `Notifier` backends (macOS `osascript`, Linux `notify-send`), per-type switches (signed `notification_settings` row), coalescing. Called from `appendEvent` |
 | `src/store.ts` | SQLite (`node:sqlite`): credentials, proxies, usage totals, request log, row signatures, issue/renew/rotate, limits, auto-renew |
 | `src/metering.ts` | Usage parsing (JSON and SSE, OpenAI and Anthropic shapes), the decoded response side copy, rate limiter, in-flight reservations, usage high-water marks, error bodies in OpenAI or Anthropic format |
@@ -29,7 +30,7 @@ dependencies.
 | `src/logfile.ts` | Rotating log writer (1 MB x 3), stdout/stderr redirection for `start --service`, secret redaction, permission hardening |
 | `src/setup.ts` | `wickey setup`: the guided walkthrough; hosts a proxy in-process when none is running |
 | `src/ttl.ts` | Parses lifetimes such as `30s`, `5m`, `2h`, `1d` |
-| `web/` | Dashboard: Svelte 5 + Vite + Tailwind v4. `src/app.css` holds every design token, `src/lib/api.ts` every API call, `src/lib/components/` the shared components, `src/lib/pages/proxies/` the Proxies page, `src/lib/pages/activity/` the Activity page (request log across proxies, filters kept in the URL hash) |
+| `web/` | Dashboard: Svelte 5 + Vite + Tailwind v4. `src/app.css` holds every design token, `src/lib/api.ts` every API call, `src/lib/components/` the shared components, `src/lib/pages/proxies/` the Proxies page, `src/lib/pages/activity/` the Activity page (request log across proxies, filters kept in the URL hash), `src/lib/pages/events/` the Events page and the Alerts drawer, `components/EventsBanner.svelte` the "since your last visit" banner |
 | `test/*.test.ts` | `node:test`. `security.test.ts` plays a local attacker |
 
 ## Request flow for a proxied call
@@ -189,7 +190,26 @@ sequence numbers and checks every MAC while unlocked. `data` holds ids, names an
 MACs are reported as `before_reset` (not verifiable), not as tampering. A real reset fails every old
 MAC; a mix of passing and failing old MACs before a `reset` is reported as tampering (someone
 inserting a fake reset). `GET /api/events?before=<seq>&limit=<n>` (session required, default 50,
-max 200, newest first) returns entries with a `trust` field plus the `verifyLog` summary.
+max 200, newest first, optional `type=<event type>`) returns entries with a `trust` field plus the
+`verifyLog` summary, `head` (newest seq), `seen` (the last-seen marker, see below) and `unseen` (banner
+buckets over the whole log for entries newer than the marker; routine `signed_in`, `locked`,
+`checkpoint`, `limits_tightened` and keys with limits are left out, `key_issued` without limits counts
+as `key_unrestricted`).
+
+**Last-seen marker.** Table `event_settings` (one row: `seen_seq`, `seen_hash`, `sig` = HMAC of
+`events-seen|v1|<seq>|<hash>`, re-signed on every write and by `resignAllRows`). The marker is pinned to
+the entry it points at. `POST /api/events/seen {seq}` (session required) is the only thing that moves
+it; it never moves backwards and refuses a seq above the newest event. Signing in does not touch it,
+because the CLI signs in on every command. A missing, unverifiable or edited row is no marker (`seen: 0`,
+`seenState` says why), so editing the database can only make more events show as new; an edited row
+records one `tamper_detected` per process. If the entry at `seen_seq` is gone or has a different hash
+(`seenState: 'mismatch'`), the log was cut back or rewritten under the marker and it counts for nothing:
+without that, a truncated log would give new events (including the `tamper_detected` that records the
+truncation) sequence numbers below the marker and the banner would hide them. Anyone holding a session
+can move the marker, which only affects the banner: every event stays in the log and the Events page.
+The banner turns red when `verifyLog()` is not ok with `firstBadSeq` above the marker, or a
+`tamper_detected` is newer than the marker; "Acknowledge" is the same call, so a permanent chain break
+stops nagging once acknowledged but stays red on the Events page.
 
 Events written by actions (`data` is ids, names and limits only; `via` is `dashboard`, `cli`,
 `terminal` or `setup_link`). One action writes one event, with `auto_renew_enabled` as the one

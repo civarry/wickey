@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.ts';
 import { defaultKeychain, type Keychain } from './keychain.ts';
+import { bannerKey, type Trust } from './eventtext.ts';
 import { notifyEvent } from './notify.ts';
 import { eventMac, isUnlocked, verifyEventMac } from './vault.ts';
 
@@ -35,12 +36,8 @@ export interface EventEntry {
   mac: string | null;
 }
 
-/** How far an entry can be believed, for display. */
-export type Trust =
-  | 'verified' // hash chain intact and MAC checked
-  | 'recorded_while_locked' // no MAC: a local program could have added it
-  | 'before_reset' // from before a reset: the old key is gone, so integrity cannot be verified
-  | 'unchecked'; // has a MAC, but the vault is locked so it was not checked
+/** How far an entry can be believed, for display (defined in eventtext.ts, shared with the dashboard). */
+export type { Trust };
 
 export interface LogSummary {
   ok: boolean;
@@ -393,14 +390,47 @@ export function verifyLog(): LogSummary {
   return withAnchor(analyze()).summary;
 }
 
-/** Newest first. `before` is exclusive (pass the last seq of the previous page). */
-export function listEvents(opts: { before?: number; limit?: number } = {}): { events: LoggedEvent[]; summary: LogSummary } {
+export interface EventsPage {
+  events: LoggedEvent[];
+  summary: LogSummary;
+  /** Newest seq in the log (0 when empty). */
+  head: number;
+  /** The marker that applies: 0 when none was given or the log no longer matches it. */
+  seen: number;
+  /** The given marker pointed at an entry that is gone or different: the log was cut back or rewritten. */
+  seenMismatch: boolean;
+  /** Banner buckets (see `bannerKey`) for entries newer than `seen`, over the whole log, not just this page. */
+  unseen: Record<string, number>;
+}
+
+/**
+ * Newest first. `before` is exclusive (pass the last seq of the previous page). `type` keeps one
+ * event type. `seen` is the "last seen" marker (an entry's seq and hash) used to count `unseen`. It only counts
+ * while that very entry is still in the log: a log cut back or rewritten under it makes every entry new again.
+ */
+export function listEvents(opts: { before?: number; limit?: number; type?: string; seen?: { seq: number; hash: string } } = {}): EventsPage {
   const { summary, trust, entries } = withAnchor(analyze());
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
+  const head = entries.reduce((n, e) => Math.max(n, e.seq), 0);
   const events = entries
-    .filter((e) => opts.before === undefined || e.seq < opts.before)
+    .filter((e) => (opts.before === undefined || e.seq < opts.before) && (opts.type === undefined || e.type === opts.type))
     .sort((a, b) => b.seq - a.seq)
     .slice(0, limit)
-    .map((e) => ({ ...e, trust: trust.get(e.seq) ?? 'recorded_while_locked' }));
-  return { events, summary };
+    .map((e) => ({ ...e, trust: trust.get(e.seq) ?? 'recorded_while_locked' as Trust }));
+  const unseen: Record<string, number> = {};
+  const m = opts.seen;
+  const mismatch = !!m && m.seq > 0 && entries.find((e) => e.seq === m.seq)?.hash !== m.hash;
+  const after = m && !mismatch ? m.seq : 0;
+  for (const e of entries) {
+    if (e.seq <= after) continue;
+    const k = bannerKey(e);
+    if (k) unseen[k] = (unseen[k] ?? 0) + 1;
+  }
+  return { events, summary, head, seen: after, seenMismatch: mismatch, unseen };
+}
+
+/** Hash of the entry with this seq, '' for 0, null when there is none. For the "last seen" marker. */
+export function entryHash(seq: number): string | null {
+  if (seq === 0) return '';
+  return analyze().entries.find((e) => e.seq === seq)?.hash ?? null;
 }

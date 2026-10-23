@@ -237,6 +237,7 @@ script Wickey.
 | `lock` | End the grace period now and sign every dashboard tab out (no passphrase needed) |
 | `passphrase` | Change the passphrase. Asks (hidden) for the current one, even during the grace period, then the new one twice |
 | `notifications [on <type>\|off <type>\|test]` | Desktop alerts for security events (unlock, passphrase change, reset, repeated wrong passphrases, unlimited keys, looser limits, auto-renew, tampering). Lists them with no argument; `off` asks for the passphrase in a terminal, even during the grace period; `test` shows one. macOS and Linux (`notify-send`); Windows not yet |
+| `events [--all] [--type <t>] [--json]` | Show the security event log, newest first (20 by default): what happened in plain words, where it came from, whether the entry can be trusted (verified, recorded while locked, before reset), and whether the log passed its integrity check. `*` marks events newer than the last one you marked as seen in the dashboard. Needs the passphrase like every command |
 | `reset` | Forgot the passphrase: delete the vault and all data, then set up again. Asks you to type `reset` in a terminal, and refuses while the proxy runs |
 | `add <name> --provider <p> [--base-url <url>] [--auth bearer\|x-api-key]` | Store a credential; the key comes from a hidden prompt or stdin. Providers: `openai`, `anthropic`, `openrouter`, `custom` (needs `--base-url`) |
 | `creds` | List stored credentials (never shows keys) |
@@ -464,7 +465,7 @@ against running it by accident; it is not a security boundary.
 - **Grace banner**: countdown to the end of the grace period, with **Lock now** (signs every tab out).
 - **Expired line**: one line when proxies have expired, with **Renew all** (same keys).
 
-The sidebar has two pages, **Proxies** (with its Credentials section) and **Activity**. The URL hash
+The sidebar has three pages, **Proxies** (with its Credentials section), **Activity** and **Events**. The URL hash
 holds the view, so reload and the back button keep it.
 
 **Activity** (`#/activity`) lists requests across all proxies, newest first: time, proxy, model,
@@ -472,6 +473,22 @@ status (refused requests say why), tokens in and out, and duration, plus auto-re
 proxy (also by clicking a proxy name in the table) and by status (All, OK, Refused); the filters live in
 the URL, e.g. `#/activity?proxy=<id>&status=refused`. **Load more** pages back through the log. Only
 metadata is kept, never prompts or responses.
+
+**Events** (`#/events`) is the security event log in plain words, newest first: time, what happened,
+where it came from (dashboard, command line, terminal, setup link) and a trust badge (verified,
+recorded while locked, before reset, unchecked; hover for what each means). The top line says whether
+the log passed its integrity check, or what is wrong and what to do. Filter by event type (kept in the
+URL) and **Load more** to page back. **Alerts** opens the desktop-notification switches: always-on types
+are shown disabled, turning one off asks for the passphrase even in the grace period, and a system
+that cannot show notifications says so. The same list is `wickey events` in the terminal.
+
+On the Proxies page a banner reads **Since your last visit: 2 unlocks, 1 key with no limits, ...**
+whenever events newer than your last-seen marker exist (routine ones like sign-ins and keys with
+limits are not counted; they are still in Events). **Mark as seen** moves the marker; nothing else
+does, not even signing in, because the CLI signs in on every command. If the log fails its integrity
+check, or a tamper detection is newer than the marker, the banner turns red with the reason and a
+next step, and its button reads **Acknowledge**. The marker is stored in a signed row: an edited one
+counts as no marker, so editing the database can never hide events.
 
 The Proxies page follows the order you work in:
 
