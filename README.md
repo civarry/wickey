@@ -9,6 +9,42 @@ a `.env` file, a log, or an agent's context.
 > output, `CONIN$` terminal prompt, the Task Scheduler start-on-login) but nobody has verified them. Subscription sign-in (ChatGPT,
 > Claude Pro/Max) is planned, not built.
 
+## Why Wickey
+
+If you run AI agents, your API key probably lives in a `.env` file or an `export` in your shell
+profile. Every agent, script and plugin you run can read it, it never expires, and it has no
+ceiling. It ends up in transcripts, logs, screenshots and the odd public commit. When it leaks, you
+usually find out from the bill.
+
+Wickey changes what you hand out:
+
+- **Agents never hold your real key.** They get a `sk-wick-…` key that only works against
+  `127.0.0.1` on your machine. Pasted into a chat, a log or a commit, it is useless anywhere else.
+- **Keys expire on their own.** Ten minutes for one task, eight hours for a workday. A leaked key
+  is already dead, or will be soon.
+- **A runaway agent hits a wall.** Limit each key to specific models, a request rate and a total
+  token budget. A loop that would have burned your credits gets refused at the cap.
+- **You can see what each key did.** Every key keeps its own activity log, even after it expires.
+- **One terminal, one key.** One line in your shell profile gives each new terminal its own fresh
+  key instead of one permanent secret shared by everything.
+- **No code changes.** OpenAI and Anthropic SDKs work as they are: swap the base URL and key.
+  Streaming works.
+- **Nothing leaves your machine.** No account, no hosted service, no runtime dependencies. Requests
+  go straight from the proxy to your provider.
+
+### A proxy in front of your proxy
+
+Already using OpenRouter, LiteLLM, Ollama or a company gateway? Keep it. Add it as a credential and
+Wickey sits in front of it:
+
+```
+agent ──sk-wick-…──▶ Wickey (127.0.0.1) ──real key──▶ OpenRouter / LiteLLM / your gateway ──▶ models
+```
+
+The gateway still does routing, fallbacks and billing. Wickey decides who gets a key, for how long
+and with what limits, and keeps the gateway's own key out of your agents' hands. Local gateways on
+`localhost` or a private network are allowed as targets.
+
 ## Requirements and install
 
 - Node.js 24 or newer. It runs the TypeScript source directly: no build step, no runtime dependencies.
@@ -409,8 +445,8 @@ Changes made from the CLI show up within 5 seconds. The page loads no external r
   credential, so moving one credential's encrypted key onto another fails to decrypt.
 - **Keys exist only in the proxy's memory.** The unlocked data key is held by the running proxy and
   never written to disk. After a restart it is locked, and proxy keys return `503` until you unlock.
-- **Database.** Credentials and proxies live in `~/.wickey/wickey.db` (SQLite). Each proxy's
-  key is stored there so it can be shown again; requests are checked against its SHA-256 hash. Real
+- **Database.** Credentials and proxies live in `~/.wickey/wickey.db` (SQLite). Proxy keys
+  are stored only as a SHA-256 hash plus their last 5 characters, so they can't be shown again. Real
   provider keys are never in this file.
 - **Signed rows.** Every credential and proxy row carries an HMAC made with a key from the vault.
   A row written or edited directly in the SQLite file fails the check: such a proxy is refused, and
