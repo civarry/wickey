@@ -1,6 +1,62 @@
+# Wickey exists to keep keys out of files. Keep them out of this repo too.
+
+# Secrets and env files (templates like .env.example stay committed)
+.env
+.env.*
+!.env.example
+!.env.sample
+*.env
+.envrc
+.npmrc
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.keystore
+id_rsa*
+id_ed25519*
+credentials.json
+secrets.json
+service-account*.json
+
+# Wickey data: a WICKEY_HOME pointed inside the repo, or a stray vault/database copy
+.wickey/
+vault.json
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Logs (redacted, but still a record of your activity)
+logs/
+*.log
+*.log.*
+npm-debug.log*
+
+# Dependencies and build output
 node_modules/
-.DS_Store
 web/dist/
+*.tsbuildinfo
+.vite/
+coverage/
+
+# Scratch and temp
+tmp/
+.tmp/
+*.tmp
+*.bak
+*.swp
+
+# Editors and OS
+.vscode/
+.idea/
+*.code-workspace
+.DS_Store
+Thumbs.db
+desktop.ini
 
 # Local Claude Code config, not shipped
 CLAUDE.md
