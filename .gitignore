@@ -1,3 +1,7 @@
 node_modules/
 .DS_Store
 web/dist/
+
+# Local Claude Code config, not shipped
+CLAUDE.md
+.claude/
