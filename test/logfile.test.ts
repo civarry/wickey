@@ -97,6 +97,13 @@ test('service-mode proxy never logs keys, tokens or auth headers, even when upst
   await new Promise<void>((r) => upstream.listen(0, '127.0.0.1', () => r()));
   const up = (upstream.address() as net.AddressInfo).port;
 
+  // A service never sets up over HTTP (it can't print the one-time setup link anywhere safe), so
+  // the vault exists first and the service starts locked, as it does after a real login.
+  const ownHome = process.env.WICKEY_HOME;
+  process.env.WICKEY_HOME = home;
+  (await import('../src/vault.ts')).createVault('correct horse battery staple');
+  process.env.WICKEY_HOME = ownHome;
+
   const script = fileURLToPath(new URL('../bin/wickey.js', import.meta.url));
   const child = spawn(process.execPath, [script, 'start', '--service'], {
     env: { ...process.env, WICKEY_HOME: home, WICKEY_PORT: String(port), WICKEY_SCRYPT_N: '1024' },
@@ -115,7 +122,7 @@ test('service-mode proxy never logs keys, tokens or auth headers, even when upst
       cookie = r.headers.get('set-cookie')?.split(';')[0] ?? cookie;
       return r.json();
     });
-    await api('/api/setup', { passphrase: 'correct horse battery staple' });
+    await api('/api/unlock', { passphrase: 'correct horse battery staple' });
     await api('/api/credentials', { name: 'mock', provider: 'custom', apiKey: REAL, baseUrl: `http://127.0.0.1:${up}/v1` });
     const { proxy, token } = await api('/api/proxies', { credential: 'mock', ttl: '10m', limits: { models: ['x'], rpm: null, tokenCap: null, refuseUncounted: false } });
     assert.ok(token?.startsWith('sk-wick-'), 'got a proxy token');

@@ -51,6 +51,11 @@ class AppStore {
   confirmRequest = $state<ConfirmRequest | null>(null);
   passphraseRequest = $state<PassphraseRequest | null>(null);
   changePassphraseOpen = $state(false);
+  /**
+   * One-time token from the setup link `start` prints (`#setup=…`). Memory only; reactive so the
+   * gate swaps its link instructions for the form when the link is pasted into an open tab.
+   */
+  setupToken = $state('');
 
   /** Model lists per credential name, kept for the session so reopening a popover is instant. */
   modelLists = $state<Record<string, ModelEntry>>({});
@@ -156,6 +161,14 @@ class AppStore {
     })();
     this.modelFlights.set(name, run);
     return run;
+  }
+
+  /** Takes the token out of the address bar, so the router never sees it and it isn't left in the URL. */
+  takeSetupToken(): void {
+    const m = /^#setup=([A-Za-z0-9_-]+)$/.exec(location.hash);
+    if (!m) return;
+    this.setupToken = m[1];
+    history.replaceState(null, '', location.pathname + location.search);
   }
 
   toast(title: string, body = ''): void {

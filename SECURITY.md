@@ -37,6 +37,20 @@ kernel-level foothold, or a compromised provider.
   `HttpOnly; SameSite=Strict; Path=/` cookie, expires after 12 hours idle, and is cleared for
   everyone by Lock. Without one, a local program gets 401 `session_required` for everything,
   including the proxy list.
+- **First-time setup needs the person who started Wickey.** Before a vault exists, no session can
+  exist, so `POST /api/setup` would otherwise let any local program set the first passphrase
+  before the user does, and know it after the user adds real keys. Setup over HTTP therefore needs
+  a one-time token. `wickey start` without a terminal prints it as a link
+  (`http://127.0.0.1:<port>/#setup=…`): a URL fragment, which the browser never sends in requests,
+  and which the dashboard removes from the address bar on load. The token is 256 bits, kept only in
+  the proxy's memory, compared in constant time, cleared by any successful setup (dashboard or
+  terminal), and gone when the process stops. A typo'd passphrase doesn't burn it. Without it,
+  setup is 403 and no vault is created. Setup in a terminal (`wickey start`, `wickey setup`) is
+  unchanged: the server starts listening only after the prompt is answered. The start-on-login
+  service never prints a link, because its output goes to a log that any program running as you can
+  read; set the passphrase in a terminal before installing it. Not covered: a program that runs
+  `wickey start` itself sees its own link and can set up the vault of the instance it started. You
+  would notice when Wickey asks you to unlock with a passphrase you never set; run `wickey reset`.
 - `env` cleanup marks a name's expired proxies `cleaned_at` instead of deleting them, so their
   activity log survives and an agent cannot erase its trail by rerunning `env`. A cleaned-up proxy
   never authenticates and renew/rotate refuse it. `cleaned_at` is deliberately outside the row

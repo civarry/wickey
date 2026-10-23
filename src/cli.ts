@@ -8,7 +8,7 @@ import { RotatingLog, hardenDataDir, redirectOutput } from './logfile.ts';
 import { createProxyServer } from './proxy.ts';
 import { isProxyRunning, performReset, planReset } from './reset.ts';
 import { runServiceCommand } from './service.ts';
-import { graceSeconds, setUp, unlock } from './session.ts';
+import { graceSeconds, openSetup, setUp, unlock } from './session.ts';
 import { runSetup } from './setup.ts';
 import { getProxy, listCredentials, listProxies, type Limits, type Proxy } from './store.ts';
 import { DEFAULT_TTL_SECONDS, formatDuration, parseTtl } from './ttl.ts';
@@ -328,16 +328,19 @@ async function askNewPassphrase(): Promise<string | null> {
 
 async function start(asService: boolean): Promise<void> {
   const { host, port } = config();
+  let setupToken: string | null = null;
   hardenDataDir();
   if (asService) {
     // Started by launchd/systemd/Task Scheduler: no terminal, so never prompt. The proxy comes up
     // locked and waits for an unlock; its own capped log replaces the OS-level output files.
     redirectOutput(new RotatingLog(config().logFile));
-    console.log(vaultExists() ? 'Starting locked: unlock in the dashboard or with `wickey unlock`.' : 'No passphrase set yet: open the dashboard to set one.');
+    // No setup link here: this output goes to a log file that any program running as the user
+    // can read, and the link is exactly what such a program must not get.
+    console.log(vaultExists() ? 'Starting locked: unlock in the dashboard or with `wickey unlock`.' : 'No passphrase set yet. Run `wickey service uninstall`, then `wickey setup` in a terminal (it can reinstall the service).');
   } else if (!vaultExists()) {
     const passphrase = await askNewPassphrase();
     if (passphrase === null) {
-      console.log('No terminal to set a passphrase in. Open the dashboard to set one.');
+      setupToken = openSetup();
     } else {
       setUp(passphrase);
       console.log('Passphrase set. Your keys are now in the encrypted vault.');
@@ -363,7 +366,11 @@ async function start(asService: boolean): Promise<void> {
   const server = createProxyServer();
   server.on('error', (err: NodeJS.ErrnoException) =>
     fail(err.code === 'EADDRINUSE' ? `Port ${port} is already in use. Is Wickey already running?` : err.message));
-  server.listen(port, host, () => console.log(`Wickey proxy listening on http://${host}:${port}\nDashboard: http://${host}:${port}/`));
+  server.listen(port, host, () => {
+    console.log(`Wickey proxy listening on http://${host}:${port}\nDashboard: http://${host}:${port}/`);
+    // Printed only here, where it reaches whoever ran `start`. It works once and dies with this process.
+    if (setupToken) console.log(`\nNo terminal to set a passphrase in. Open this one-time link to set it:\n  http://${host}:${port}/#setup=${setupToken}`);
+  });
 }
 
 async function main(argv: string[]): Promise<void> {

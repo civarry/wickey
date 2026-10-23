@@ -27,6 +27,8 @@ That request went through Wickey with a key that dies in 10 minutes. Anything th
 `OPENAI_BASE_URL` and `OPENAI_API_KEY` (the OpenAI SDKs, most agents) now works the same way.
 Prefer clicking? Open `http://127.0.0.1:7777/` while `start` runs.
 
+You can let an agent install Wickey, but set the passphrase and add your keys yourself.
+
 ## Why Wickey
 
 If you run AI agents, your API key probably lives in a `.env` file or an `export` in your shell
@@ -104,8 +106,13 @@ wickey start
 
 On first run it asks you to set a passphrase (at least 12 characters, asked twice; four or more
 random words work well). On later runs it
-asks for the passphrase to unlock. If you start it without a terminal (a service, a script), it
-starts locked, and you set or unlock the passphrase in the dashboard at `http://127.0.0.1:7777/`.
+asks for the passphrase to unlock (or press Enter to start locked and unlock in the dashboard).
+
+Started without a terminal on a fresh install, it prints a **one-time setup link** instead. Open it
+to set the passphrase in the dashboard. The link works once and only while that process runs, so no
+other program on your computer can set the passphrase before you do. The start-on-login service
+never prints one (its log is readable by any program running as you), so set the passphrase in a
+terminal before you install the service.
 
 **The passphrase can't be recovered.** It encrypts your provider keys. Forget it and you re-add
 every key. Pick a long one (see [What this protects](#what-this-protects-and-what-it-doesnt)).
@@ -211,7 +218,8 @@ Commands that change anything need a terminal for the passphrase prompt, on purp
 job (cron, CI, an agent's subprocess) can't answer it, so it can't mint keys. Without a terminal:
 
 - **Use the dashboard** at `http://127.0.0.1:7777/` in a browser. It covers credentials, keys and limits,
-  and asks for the passphrase in the page.
+  and asks for the passphrase in the page. On a fresh install, open the one-time setup link that
+  `wickey start` printed instead (see [First run](#first-run)).
 - **For an unattended job**, issue a key for it from a terminal or the dashboard, with the limits
   that job needs (models, rate, token cap), and hand that key to the job.
 

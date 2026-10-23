@@ -110,14 +110,16 @@ export async function runSetup(h: SetupHelpers): Promise<void> {
     console.log('Step 1 of 4: passphrase');
     if (vaultExists()) {
       console.log('  A passphrase is already set. Skipping.\n');
+    } else if (external) {
+      // A running proxy only accepts setup with the one-time link it printed, which this process
+      // can't have (on purpose: any local program could read wherever it would be kept).
+      console.log(`  A ${BRAND.command} proxy is already running on this port without a passphrase. Open the setup`);
+      console.log(`  link it printed, or stop it (for the login service: \`${BRAND.command} service uninstall\`) and run`);
+      console.log(`  \`${BRAND.command} setup\` again. Credentials need a passphrase, so step 2 is skipped too.\n`);
     } else if (await yesNo('  Create the passphrase now?', true)) {
       const passphrase = await h.askNewPassphrase();
       if (passphrase === null) {
         console.log('  Skipped. Run `wickey start` later to set it.\n');
-      } else if (external) {
-        await h.call('POST', '/api/setup', { passphrase });
-        h.rememberPassphrase(passphrase);
-        console.log('  Passphrase set.\n');
       } else {
         setUp(passphrase);
         h.rememberPassphrase(passphrase);

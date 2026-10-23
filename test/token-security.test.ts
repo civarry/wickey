@@ -425,11 +425,16 @@ test('a restart signs everyone out: an old cookie is dead, and unlock starts a n
   const childPort = await new Promise<number>((resolve) => {
     const s = net.createServer().listen(0, '127.0.0.1', () => { const p = (s.address() as net.AddressInfo).port; s.close(() => resolve(p)); });
   });
+  // Plain `start` with no terminal: the first run prints the one-time setup link, the second
+  // starts locked. stdout is captured so the test can follow the link like a user would.
+  let output = '';
   const start = async () => {
-    const child = spawn(process.execPath, [script, 'start', '--service'], {
+    output = '';
+    const child = spawn(process.execPath, [script, 'start'], {
       env: { ...process.env, WICKEY_HOME: dir, WICKEY_PORT: String(childPort), WICKEY_SCRYPT_N: '1024' },
-      stdio: 'ignore', detached: true,
+      stdio: ['ignore', 'pipe', 'ignore'], detached: true,
     });
+    child.stdout!.on('data', (d) => (output += d));
     cleanups.push(() => { try { child.kill(); } catch { /* gone */ } });
     for (let i = 0; i < 100; i++) {
       try { if ((await fetch(`http://127.0.0.1:${childPort}/health`)).ok) return child; } catch { /* not up yet */ }
@@ -440,7 +445,10 @@ test('a restart signs everyone out: an old cookie is dead, and unlock starts a n
   const stop = (child: ReturnType<typeof spawn>) => new Promise<void>((r) => { child.once('exit', () => r()); child.kill(); });
   try {
     const first = await start();
-    const setup = await raw({ method: 'POST', path: '/api/setup', port: childPort, body: { passphrase: PASS } });
+    let token = '';
+    for (let i = 0; i < 50 && !token; i++, await sleep(50)) token = /#setup=([A-Za-z0-9_-]+)/.exec(output)?.[1] ?? '';
+    assert.ok(token, 'start prints a setup link when there is no terminal');
+    const setup = await raw({ method: 'POST', path: '/api/setup', port: childPort, body: { passphrase: PASS, token } });
     assert.equal(setup.status, 201);
     const cookie = cookieOf(setup);
     assert.equal((await raw({ path: '/api/state', port: childPort, headers: { cookie } })).status, 200, 'setup signs the browser in');

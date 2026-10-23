@@ -288,7 +288,8 @@ export const sessionStatus = () => plain<SessionStatus>('GET', '/api/session-sta
 /** The vault is already unlocked (another browser, the CLI): prove the passphrase to get a session here. */
 export const signIn = (passphrase: string) => plain<{ session: SessionState }>('POST', '/api/signin', { passphrase });
 export const getState = () => request<AppState>('GET', '/api/state');
-export const setup = (passphrase: string) => plain<SetupResponse>('POST', '/api/setup', { passphrase });
+/** `token` is the one-time setup token from the link `start` printed (see app.takeSetupToken). */
+export const setup = (passphrase: string, token: string) => plain<SetupResponse>('POST', '/api/setup', { passphrase, token });
 export const unlock = (passphrase: string) => plain<{ session: SessionState }>('POST', '/api/unlock', { passphrase });
 /** Carries its own passphrases (plain), so a wrong current one is an inline error, not the shared prompt. */
 export const changePassphrase = (current: string, next: string) =>

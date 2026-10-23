@@ -10,6 +10,8 @@
   const MIN_PASSPHRASE = 12;
   const mode = $derived(app.gateMode);
   const setupMode = $derived(mode === 'setup');
+  // Setup in the browser needs the one-time link `start` printed; without it the form could only fail.
+  const needsLink = $derived(setupMode && !app.setupToken);
 
   let pass = $state('');
   let again = $state('');
@@ -32,7 +34,7 @@
     busy = true;
     try {
       if (setupMode) {
-        await api.setup(pass);
+        await api.setup(pass, app.setupToken);
         app.toast('Passphrase set', 'Your keys are now encrypted.');
       } else if (mode === 'signin') {
         await api.signIn(pass);
@@ -79,14 +81,22 @@
         </ul>
       {/if}
 
-      <Input label="Passphrase" type="password" bind:value={pass} autocomplete={setupMode ? 'new-password' : 'current-password'} />
-      {#if setupMode}
-        <Input label="Repeat passphrase" type="password" bind:value={again} autocomplete="new-password" />
+      {#if needsLink}
+        <div class="flex flex-col gap-3 text-[13px] text-text-muted">
+          <p>To set it here, open the one-time setup link that <span class="font-mono text-text">wickey start</span> printed where you ran it. It works once, and only while that process runs. This keeps other programs on this computer from setting a passphrase before you do.</p>
+          <p>Or stop Wickey and run this in a terminal:</p>
+          <CopyField label="Setup command" value="wickey setup" />
+        </div>
+      {:else}
+        <Input label="Passphrase" type="password" bind:value={pass} autocomplete={setupMode ? 'new-password' : 'current-password'} />
+        {#if setupMode}
+          <Input label="Repeat passphrase" type="password" bind:value={again} autocomplete="new-password" />
+        {/if}
+        {#if error}<p role="alert" class="text-[13px] text-danger-text">{error}</p>{/if}
+        <Button type="submit" variant="primary" {busy} busyLabel={setupMode ? 'Encrypting…' : mode === 'signin' ? 'Signing in…' : 'Unlocking…'} class="w-full">
+          {setupMode ? 'Set passphrase' : mode === 'signin' ? 'Sign in' : 'Unlock'}
+        </Button>
       {/if}
-      {#if error}<p role="alert" class="text-[13px] text-danger-text">{error}</p>{/if}
-      <Button type="submit" variant="primary" {busy} busyLabel={setupMode ? 'Encrypting…' : mode === 'signin' ? 'Signing in…' : 'Unlocking…'} class="w-full">
-        {setupMode ? 'Set passphrase' : mode === 'signin' ? 'Sign in' : 'Unlock'}
-      </Button>
       {#if !setupMode}
         <details class="group text-[13px]">
           <summary class="cursor-pointer text-text-muted hover:text-text">Forgot your passphrase?</summary>

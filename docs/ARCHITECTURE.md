@@ -230,6 +230,11 @@ All in `src/session.ts`, in memory only.
 
 - **Unlock** derives the key from the passphrase and holds the data key in process memory.
   After a restart the proxy is locked and proxy keys return an error until someone unlocks.
+- **Setup token.** `POST /api/setup` needs `token`, made by `openSetup()` when `start` runs with no
+  vault and no terminal, and printed only as `http://127.0.0.1:<port>/#setup=<token>` on its stdout
+  (never in service mode, whose log any same-user program can read). Memory only; `setUp()` clears
+  it whichever path set up the vault. The dashboard's `main.ts` moves it from the hash into
+  `app.setupToken` before the router runs (and on `hashchange`, for a link pasted into an open tab).
 - **Sessions.** Every `/api` route needs one except `GET /api/session-status` (vault, unlocked,
   signedIn: nothing else), `POST /api/setup`, `POST /api/unlock`, `POST /api/signin` and `POST /api/lock` (lock is harmless: if it ever also
   locks the vault or stops traffic, it must leave this list). A session

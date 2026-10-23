@@ -32,7 +32,7 @@ import { isRollbackFlagged } from './metering.ts';
 import { ensureModels, forceRefreshModels } from './models.ts';
 import {
   AuthRequiredError, SESSION_COOKIE, TooManyAttemptsError, changePassphrase, createSession, endSession, lock, publicStatus,
-  requireAuth, sessionIdFromCookie, sessionState, setUp, signIn, touchSession, unlock,
+  requireAuth, sessionIdFromCookie, sessionState, setUp, setupTokenMatches, signIn, touchSession, unlock,
 } from './session.ts';
 import { DEFAULT_TTL_SECONDS, parseTtl } from './ttl.ts';
 import { MIN_PASSPHRASE, WrongPassphraseError, isUnlocked, vaultExists } from './vault.ts';
@@ -245,8 +245,9 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
   }
 
   if (method === 'POST' && path === '/api/setup') {
-    const body = await readJson(req, ['passphrase']);
+    const body = await readJson(req, ['passphrase', 'token']);
     if (vaultExists()) throw new HttpError(409, 'A passphrase is already set.');
+    if (!setupTokenMatches(body.token)) throw new HttpError(403, `Open the setup link printed by \`${BRAND.command} start\`, or run \`${BRAND.command} setup\` in a terminal.`);
     const passphrase = String(body.passphrase ?? '');
     if (passphrase.length < MIN_PASSPHRASE) throw new HttpError(400, `Passphrase must be at least ${MIN_PASSPHRASE} characters.`);
     setUp(passphrase);

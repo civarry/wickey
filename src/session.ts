@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { BRAND, envVar } from './brand.ts';
 import { signExistingRows, listCredentials } from './store.ts';
 import { WrongPassphraseError, changePassphrase as rewrapVault, createVault, getSecret, isUnlocked, unlockVault, vaultExists, verifyPassphrase } from './vault.ts';
@@ -129,9 +129,28 @@ export function lock(): void {
   clearSessions();
 }
 
+// Setup over HTTP needs a one-time token that `start` prints as a link. Without it, any local
+// program could set the first passphrase before the user does and know it forever. Memory only:
+// it dies with the process, and any setup (dashboard or terminal) clears it.
+let setupToken: string | null = null;
+
+/** Starts accepting setup over HTTP and returns the token for the setup link. */
+export function openSetup(): string {
+  setupToken = randomBytes(32).toString('base64url');
+  return setupToken;
+}
+
+export function setupTokenMatches(given: unknown): boolean {
+  if (!setupToken || typeof given !== 'string') return false;
+  const a = Buffer.from(given);
+  const b = Buffer.from(setupToken);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
 /** Creates the vault, signs any rows that predate it, and starts the grace period. */
 export function setUp(passphrase: string): void {
   createVault(passphrase);
+  setupToken = null;
   signExistingRows();
   startGrace();
 }
