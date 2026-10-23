@@ -111,7 +111,7 @@
         {/each}
       </Select>
     {/if}
-    <Input label="Base URL" bind:value={baseUrl} {placeholder} help={urlHelp} mono autocomplete="off" spellcheck={false} optional={adding} />
+    <Input label="Base URL" bind:value={baseUrl} {placeholder} help={urlHelp} mono autocomplete="off" spellcheck={false} optional={adding && !!preset?.baseUrl} required={adding && !preset?.baseUrl} />
     <Select label="Authentication" bind:value={auth} help="How the upstream provider expects the key.">
       <option value="bearer">Bearer token</option>
       <option value="x-api-key">API key header (x-api-key)</option>

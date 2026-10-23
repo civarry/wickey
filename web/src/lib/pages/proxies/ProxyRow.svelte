@@ -164,7 +164,7 @@
       <Tooltip focusable text={`In ${proxy.usage.tokensIn.toLocaleString('en-US')}, out ${proxy.usage.tokensOut.toLocaleString('en-US')}, ${proxy.usage.uncounted.toLocaleString('en-US')} requests without a usage count.`}>
         <span class="flex flex-col">
           <span>{proxy.usage.requests} req · {compact(tokens)} tok</span>
-          <span class="text-xs text-text-muted">{proxy.usage.lastUsedAt ? ago(proxy.usage.lastUsedAt, app.now) : 'never'}</span>
+          <span class="text-xs text-text-muted">{proxy.usage.lastUsedAt ? `Last used ${ago(proxy.usage.lastUsedAt, app.now)}` : 'Not used yet'}</span>
         </span>
       </Tooltip>
     </td>

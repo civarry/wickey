@@ -220,7 +220,7 @@
         <SegmentedControl label="Lifetime" options={LIFETIMES} bind:value={lifetime} onchange={pickPreset} disabled={empty} />
       </div>
       <div class="flex flex-col gap-1.5">
-        <span class="text-[13px] font-medium">Limits<span class="ml-1 font-normal text-text-muted">(optional)</span></span>
+        <span class="text-[13px] font-medium">Limits</span>
         <LimitsPopover bind:open={limitsOpen} label="Key limits" applied={limitsApplied} credential={selectedCredential} notice={limitsNotice} onsubmit={applyLimits}>
           {#snippet trigger(p)}
             <Tooltip text={limitsText} focusable={false}>
