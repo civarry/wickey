@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { addCredential, Cancelled, updateCredential } from '../../api.ts';
   import type { AuthStyle, Credential } from '../../api.ts';
   import { app } from '../../state.svelte.ts';
@@ -28,22 +29,25 @@
   let error = $state('');
   let saving = $state(false);
 
-  // Fresh form each time the drawer opens.
+  // Fresh form each time the drawer opens. Untracked: the reset reads app.data, which every poll
+  // replaces, and a tracked read would wipe what the user is typing every few seconds.
   $effect(() => {
     if (!open) return;
-    error = '';
-    apiKey = '';
-    replacing = false;
-    if (credential) {
-      name = credential.name;
-      baseUrl = credential.baseUrl;
-      auth = credential.authStyle;
-    } else {
-      name = '';
-      baseUrl = '';
-      provider = 'openai';
-      auth = app.data?.providers.openai?.auth ?? 'bearer';
-    }
+    untrack(() => {
+      error = '';
+      apiKey = '';
+      replacing = false;
+      if (credential) {
+        name = credential.name;
+        baseUrl = credential.baseUrl;
+        auth = credential.authStyle;
+      } else {
+        name = '';
+        baseUrl = '';
+        provider = 'openai';
+        auth = app.data?.providers.openai?.auth ?? 'bearer';
+      }
+    });
   });
 
   const preset = $derived(providers[provider]);
