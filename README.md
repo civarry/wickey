@@ -45,13 +45,36 @@ The gateway still does routing, fallbacks and billing. Wickey decides who gets a
 and with what limits, and keeps the gateway's own key out of your agents' hands. Local gateways on
 `localhost` or a private network are allowed as targets.
 
+### Compared to what you might use now
+
+| | Your agent holds | If that key leaks | Expires on its own | Model, rate and token limits per key | Runs |
+| --- | --- | --- | --- | --- | --- |
+| Key in `.env` or shell profile | The real key | Works from anywhere | No | No | Nothing to run |
+| Secret manager (`op run`, Doppler, …) | The real key, injected at start | Works from anywhere | No | No | A CLI, often an account |
+| Provider project keys and spend limits | A real key | Works from anywhere until you revoke it | No | Per project, not per agent or terminal | The provider's console |
+| OpenRouter or LiteLLM keys | A real gateway key | Works from anywhere the gateway is reachable | LiteLLM can set a duration | Yes | A hosted account, or a server and database |
+| **Wickey** | A `sk-wick-…` key | Works only on your machine, until it expires | Yes, by default | Yes | One local process, no account |
+
+These tools combine well. Keep your secret manager or gateway, and let Wickey be the only thing that
+holds its key.
+
 ## Requirements and install
 
-- Node.js 24 or newer. It runs the TypeScript source directly: no build step, no runtime dependencies.
+Node.js 24 or newer. No runtime dependencies.
+
+```sh
+npm install -g wickey
+wickey setup       # passphrase, first credentials, start on login
+```
+
+Install it globally before `wickey service install` (or the start-on-login step of `setup`): the
+service records the path it was installed from, and a `npx` cache can disappear.
+
+From source, if you want to hack on it (runs the TypeScript directly, no build step):
 
 ```sh
 git clone https://github.com/civarry/wickey.git && cd wickey
-npm install      # dev tools only: typescript, @types/node
+npm install      # dev tools only
 npm link         # puts `wickey` on your PATH
 ```
 
@@ -534,6 +557,7 @@ Licensed under [MIT](LICENSE).
 ```sh
 npm test          # node:test against a fake upstream
 npm run typecheck
+npm pack          # builds the dashboard and compiles src/ to dist/ (Node won't run .ts from node_modules)
 ```
 
 Tests isolate themselves with `WICKEY_HOME`, `WICKEY_PORT`,
