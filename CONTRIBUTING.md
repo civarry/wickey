@@ -145,6 +145,23 @@ period, no prefixes like `feat:`. Examples: `Add grace period banner to dashboar
 `Fix throttle reset after unlock`. Add a short body only when the reason is not obvious from the
 subject.
 
+## Releasing (maintainers)
+
+Releases are built and staged by CI with npm provenance; a maintainer approves them with 2FA.
+Nobody publishes from a laptop: `npm publish` packs the working tree, so uncommitted files would
+ship.
+
+1. Bump the version: `npm version <x.y.z> --no-git-tag-version`, commit `Release x.y.z`, push.
+2. Tag that commit and push the tag: `git tag vx.y.z && git push origin vx.y.z`.
+3. The Release workflow (`.github/workflows/release.yml`) checks the tag matches `package.json`,
+   runs typecheck and tests, and runs `npm stage publish --provenance`.
+4. Approve the staged version on npmjs.com (package page, staged versions). Check its version and
+   that the build came from the tagged commit.
+
+One-time setup, already needed before the first CI release: on npmjs.com, open the `wickey`
+package settings, add a trusted publisher for GitHub Actions (owner `civarry`, repository
+`wickey`, workflow `release.yml`), and allow it to stage publishes.
+
 ## License
 
 By contributing you agree your work is released under the [MIT License](LICENSE).

@@ -121,6 +121,46 @@ when the proxy connects.
 - **Not covered:** a hostname on a private network that the user controls can still point at any
   private service; this is a guard against accidents and metadata theft, not a network sandbox.
 
+## What Wickey connects to and runs
+
+Supply-chain scanners flag network, shell and filesystem access, and URL strings in the package.
+Wickey needs each of them. This is the complete list, so you can check it against the code.
+
+**Network.** No telemetry, no update check, no account.
+
+- Outbound only to the base URL of a credential **you** added: forwarding a proxied request
+  (`src/proxy.ts`) and fetching that provider's model list (`src/models.ts`). The built-in presets
+  are `https://api.openai.com/v1`, `https://api.anthropic.com` and `https://openrouter.ai/api/v1`;
+  they are contacted only once you add a credential for them.
+- A DNS lookup of that base URL before connecting, to refuse cloud-metadata, link-local and
+  unspecified addresses (`src/netguard.ts`). That is why `169.254.0.0` and `0.0.0.0` appear in
+  the code: they are on the blocklist, never contacted.
+- Everything else is `127.0.0.1` on your machine: the proxy, the dashboard, and the CLI talking to
+  the running proxy.
+- Other URL-looking strings are not contacted: the plist header in the macOS start-on-login file
+  (`http://www.apple.com/DTDs/...`) and placeholder bases used to parse URLs (`http://x`).
+
+**Programs it runs.** Always with `execFile` and an argument array (never through a shell), with a
+timeout, and only for the feature named:
+
+| Program | When | Why |
+| --- | --- | --- |
+| `/usr/bin/security` | macOS, after each signed event | Store the event log's anchor in the Keychain (no access-control prompt) |
+| `/usr/bin/osascript` | macOS, on a notifying event | Show a desktop notification; the text is passed as arguments, never as script |
+| `notify-send` | Linux, on a notifying event, if installed | Show a desktop notification |
+| `launchctl` / `systemctl --user` / `schtasks` | `wickey service install`, `uninstall`, `status` | Start-on-login service |
+| `xcrun swiftc`, `codesign -s -` | `wickey presence enable` / `repair` | Compile and ad-hoc sign the presence helper from `native/presence.swift` |
+| `~/.wickey/bin/wickey-presence` | Presence mode on: unlock, passphrase change, turning an alert off | Ask the Secure Enclave for the presence approval; its SHA-256 is checked before every run |
+
+**Files.** Only its data directory (`~/.wickey`, or `WICKEY_HOME`), the service definition when you
+install the service (`~/Library/LaunchAgents/dev.wickey.proxy.plist` or
+`~/.config/systemd/user/wickey.service`), and a `.env` file you explicitly import.
+
+**Releases.** Published from GitHub Actions with npm provenance (`.github/workflows/release.yml`):
+a version is staged by CI from a tagged commit, signed as built from this repository, and goes
+public only after a maintainer approves it with 2FA. Actions are pinned to commit SHAs. Versions
+up to 0.2.0 were published by hand without provenance.
+
 ## Red-team results (2026-10-23)
 
 A red-team pass played a local attacker against the current code.
