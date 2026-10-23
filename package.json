@@ -1,6 +1,6 @@
 {
   "name": "wickey",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Local proxy that hands out short-lived, limited LLM API keys from an encrypted, passphrase-locked vault.",
   "type": "module",
   "bin": {
