@@ -132,6 +132,14 @@ function json(res: http.ServerResponse, status: number, body: unknown, headers: 
 }
 
 /**
+ * The origin clients should use for /p/ URLs: always 127.0.0.1, never the Host the dashboard was
+ * opened with. The server listens on IPv4 only, and localhost can resolve to ::1 first.
+ */
+function proxyOrigin(req: http.IncomingMessage): string {
+  return `http://127.0.0.1:${req.socket.localPort}`;
+}
+
+/**
  * Any web page the user has open can send requests to 127.0.0.1, so the management API
  * only answers requests that are provably from the dashboard itself:
  * - Host must be the loopback address, which defeats DNS rebinding.
@@ -185,7 +193,7 @@ function sessionCookie(id: string): Record<string, string> {
 const PUBLIC_ROUTES = new Set(['GET /api/session-status', 'POST /api/setup', 'POST /api/unlock', 'POST /api/signin', 'POST /api/lock']);
 
 function issuedBody(req: http.IncomingMessage, issued: IssuedProxy) {
-  return { proxy: issued.proxy, token: issued.token, baseUrl: `http://${req.headers.host}/p/${issued.proxy.id}` };
+  return { proxy: issued.proxy, token: issued.token, baseUrl: `${proxyOrigin(req)}/p/${issued.proxy.id}` };
 }
 
 async function route(req: http.IncomingMessage, res: http.ServerResponse, path: string): Promise<void> {
@@ -220,7 +228,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
       proxies: listProxies({ includeCleaned: true }).map((p) => ({ ...p, rollbackFlagged: isRollbackFlagged(p.id) })),
       providers: PROVIDERS,
       defaultTtlSeconds: DEFAULT_TTL_SECONDS,
-      proxyOrigin: `http://${req.headers.host}`,
+      proxyOrigin: proxyOrigin(req),
       session: sessionState(),
     });
   }
@@ -389,7 +397,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
     auth(body);
     const proxy = renewProxy(m[1], ttlFrom(body.ttl, undefined));
     // The key itself is unchanged and not stored, so there is nothing to show.
-    return json(res, 200, { proxy, baseUrl: `http://${req.headers.host}/p/${proxy.id}` });
+    return json(res, 200, { proxy, baseUrl: `${proxyOrigin(req)}/p/${proxy.id}` });
   }
 
   if (method === 'POST' && (m = /^\/api\/proxies\/([a-f0-9]+)\/rotate$/.exec(path))) {

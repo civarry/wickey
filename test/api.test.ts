@@ -160,6 +160,15 @@ test('full lifecycle over the API: add, issue, expire, renew, rotate, delete, re
   assert.equal(issued.body.baseUrl, `http://127.0.0.1:${port}/p/${issued.body.proxy.id}`);
   assert.equal(issued.body.proxy.ttlSeconds, 90);
   const id = issued.body.proxy.id;
+  // A dashboard opened at localhost still hands out 127.0.0.1: the proxy listens on IPv4 only, and
+  // localhost can resolve to ::1 first, where a client without fallback gets connection refused.
+  const viaLocalhost = { host: `localhost:${port}`, origin: `http://localhost:${port}` };
+  const issuedLocal = await request({ method: 'POST', path: '/api/proxies', headers: viaLocalhost, body: { credential: 'mock', ttl: '90s' } });
+  assert.equal(issuedLocal.body.baseUrl, `http://127.0.0.1:${port}/p/${issuedLocal.body.proxy.id}`);
+  const rotatedLocal = await request({ method: 'POST', path: `/api/proxies/${issuedLocal.body.proxy.id}/rotate`, headers: viaLocalhost, body: {} });
+  assert.equal(rotatedLocal.body.baseUrl, `http://127.0.0.1:${port}/p/${issuedLocal.body.proxy.id}`);
+  assert.equal((await request({ path: '/api/state', headers: viaLocalhost })).body.proxyOrigin, `http://127.0.0.1:${port}`);
+  await request({ method: 'DELETE', path: `/api/proxies/${issuedLocal.body.proxy.id}`, headers: viaLocalhost });
 
   // State carries only the masked key; the full key is shown once, in the issue response.
   const afterIssue = await request({ path: '/api/state' });
