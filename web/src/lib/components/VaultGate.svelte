@@ -44,6 +44,11 @@
       pass = again = '';
       await app.refresh();
     } catch (err) {
+      // The server's 403 wording is written for agents; whoever sees it here followed a stale link.
+      if (setupMode && err instanceof api.ApiError && err.status === 403) {
+        error = 'This setup link has expired or was already used. Run `wickey start` again for a new one, or run `wickey setup` in a terminal.';
+        return;
+      }
       error = err instanceof Error ? err.message : String(err);
     } finally {
       busy = false;

@@ -28,10 +28,11 @@ import {
   updateCredential,
   type IssuedProxy,
 } from './store.ts';
+import { humanRequired } from './human.ts';
 import { isRollbackFlagged } from './metering.ts';
 import { ensureModels, forceRefreshModels } from './models.ts';
 import {
-  AuthRequiredError, SESSION_COOKIE, TooManyAttemptsError, changePassphrase, createSession, endSession, lock, publicStatus,
+  AuthRequiredError, SESSION_COOKIE, SIGN_IN_STEP, TooManyAttemptsError, changePassphrase, createSession, endSession, lock, publicStatus,
   requireAuth, sessionIdFromCookie, sessionState, setUp, setupTokenMatches, signIn, touchSession, unlock,
 } from './session.ts';
 import { DEFAULT_TTL_SECONDS, parseTtl } from './ttl.ts';
@@ -120,9 +121,11 @@ function auth(body: Record<string, any>): void {
 
 class HttpError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  humanRequired: boolean;
+  constructor(status: number, message: string, humanRequired = false) {
     super(message);
     this.status = status;
+    this.humanRequired = humanRequired;
   }
 }
 
@@ -214,7 +217,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
   const sessionId = sessionIdFromCookie(req.headers.cookie);
   const signedIn = touchSession(sessionId);
   if (!signedIn && !PUBLIC_ROUTES.has(`${method} ${path}`)) {
-    throw new AuthRequiredError('session_required', 'Sign in with your passphrase to continue.');
+    throw new AuthRequiredError('session_required', SIGN_IN_STEP);
   }
 
   if (method === 'GET' && path === '/api/session-status') return json(res, 200, publicStatus(signedIn));
@@ -247,7 +250,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
   if (method === 'POST' && path === '/api/setup') {
     const body = await readJson(req, ['passphrase', 'token']);
     if (vaultExists()) throw new HttpError(409, 'A passphrase is already set.');
-    if (!setupTokenMatches(body.token)) throw new HttpError(403, `Open the setup link printed by \`${BRAND.command} start\`, or run \`${BRAND.command} setup\` in a terminal.`);
+    if (!setupTokenMatches(body.token)) throw new HttpError(403, humanRequired(`open the one-time setup link printed by \`${BRAND.command} start\`, or run \`${BRAND.command} setup\` in their own terminal`), true);
     const passphrase = String(body.passphrase ?? '');
     if (passphrase.length < MIN_PASSPHRASE) throw new HttpError(400, `Passphrase must be at least ${MIN_PASSPHRASE} characters.`);
     setUp(passphrase);
@@ -442,11 +445,11 @@ export function handleManagement(req: http.IncomingMessage, res: http.ServerResp
     return true;
   }
   route(req, res, path).catch((err: Error) => {
-    if (err instanceof AuthRequiredError) return json(res, 401, { error: { code: err.code, message: err.message } });
+    if (err instanceof AuthRequiredError) return json(res, 401, { error: { code: err.code, message: err.message, humanRequired: true } });
     if (err instanceof WrongPassphraseError) return json(res, 401, { error: { code: 'wrong_passphrase', message: err.message } });
     if (err instanceof TooManyAttemptsError) return json(res, 429, { error: { code: 'too_many_attempts', message: err.message } });
     const status = err instanceof HttpError ? err.status : 400;
-    json(res, status, { error: { message: err.message } });
+    json(res, status, { error: { message: err.message, ...(err instanceof HttpError && err.humanRequired ? { humanRequired: true } : {}) } });
   });
   return true;
 }

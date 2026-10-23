@@ -3,6 +3,7 @@ import { BRAND } from './brand.ts';
 import { config } from './config.ts';
 import { parseModelsFlag } from './models.ts';
 import { PROVIDERS, isProvider } from './providers.ts';
+import { humanRequired, noTerminalMessage } from './human.ts';
 import { hasTerminal, promptHidden, promptVisible, readPiped } from './prompt.ts';
 import { RotatingLog, hardenDataDir, redirectOutput } from './logfile.ts';
 import { createProxyServer } from './proxy.ts';
@@ -116,7 +117,8 @@ function timeLeft(proxy: Proxy): string {
 // Neither the passphrase nor the cookie is written anywhere.
 const cli: { cookie: string | null; passphrase: string | null } = { cookie: null, passphrase: null };
 
-const NO_TERMINAL = 'This needs your passphrase, but there is no terminal to ask it in. Run it in a terminal (cron, CI and other background jobs cannot mint keys).';
+
+const NO_PASSPHRASE_YET = humanRequired(`set a passphrase: open the one-time setup link printed by \`${BRAND.command} start\`, or run \`${BRAND.command} setup\` in their own terminal`);
 
 function url(path: string): string {
   const { host, port } = config();
@@ -155,7 +157,7 @@ async function failAfterSignOut(message: string): Promise<never> {
 
 async function askPassphrase(): Promise<string> {
   const passphrase = await promptHidden('Wickey passphrase: ');
-  if (passphrase === null) return failAfterSignOut(NO_TERMINAL);
+  if (passphrase === null) return failAfterSignOut(noTerminalMessage());
   if (!passphrase) return failAfterSignOut('Cancelled.');
   return passphrase;
 }
@@ -179,7 +181,7 @@ async function ensureSession(reprompt = true): Promise<void> {
       if (!cli.cookie) fail('The proxy did not start a session. Update Wickey and restart it.');
       return;
     }
-    if (data.error?.code === 'setup_required') fail('No passphrase set yet. Run `wickey start` in a terminal to set one up.');
+    if (data.error?.code === 'setup_required') fail(NO_PASSPHRASE_YET);
     if (data.error?.code !== 'wrong_passphrase') fail(data.error?.message ?? `Sign-in failed (${res.status}).`);
     cli.passphrase = null;
     if (preset && !reprompt) fail('Wrong current passphrase. Nothing was changed; run `wickey passphrase` to try again.');
@@ -214,7 +216,7 @@ async function call(method: string, path: string, body: Record<string, unknown> 
     res = await send(method, path, { ...body, passphrase }, cli.cookie);
     data = await res.json().catch(() => ({}));
   }
-  if (data.error?.code === 'setup_required') return failAfterSignOut('No passphrase set yet. Run `wickey start` in a terminal to set one up.');
+  if (data.error?.code === 'setup_required') return failAfterSignOut(NO_PASSPHRASE_YET);
   if (!res.ok) return failAfterSignOut(data.error?.message ?? `Request failed (${res.status}).`);
   return data;
 }
@@ -432,7 +434,7 @@ async function main(argv: string[]): Promise<void> {
 
     case 'unlock': {
       const passphrase = await promptHidden('Wickey passphrase: ');
-      if (passphrase === null) fail(NO_TERMINAL);
+      if (passphrase === null) fail(noTerminalMessage());
       if (!passphrase) fail('Cancelled.');
       // Unlock hands back a session, which this command has no use for.
       const res = await send('POST', '/api/unlock', { passphrase }, null);
@@ -452,7 +454,7 @@ async function main(argv: string[]): Promise<void> {
     }
 
     case 'passphrase': {
-      if (!hasTerminal()) fail('Changing the passphrase needs a terminal to type it in. Run `wickey passphrase` in one.');
+      if (!hasTerminal()) fail(noTerminalMessage());
       const current = await promptHidden('Current passphrase: ');
       if (!current) fail('Cancelled.');
       const next = await promptHidden('New passphrase: ');
@@ -468,7 +470,7 @@ async function main(argv: string[]): Promise<void> {
     }
 
     case 'reset': {
-      if (!hasTerminal()) fail('Reset asks you to confirm in a terminal, to guard against running it by accident. Run `wickey reset` in one.');
+      if (!hasTerminal()) fail(noTerminalMessage());
       if (await isProxyRunning()) fail(`Wickey is running on port ${config().port}. Stop it first (Ctrl-C in the terminal running \`wickey start\`), then run \`wickey reset\` again.`);
       const plan = planReset();
       if (!plan.vaultFile && !plan.credentials.length && !plan.proxies) return console.log('Nothing to reset: there is no vault or data in ' + config().home + '.');
@@ -491,7 +493,7 @@ async function main(argv: string[]): Promise<void> {
       if (!provider || !isProvider(provider)) fail(`--provider must be one of: ${Object.keys(PROVIDERS).join(', ')}`);
       if (values.auth && values.auth !== 'bearer' && values.auth !== 'x-api-key') fail('--auth must be bearer or x-api-key');
       const apiKey = process.stdin.isTTY ? await promptHidden(`API key for ${arg}: `) : await readPiped();
-      if (!apiKey) fail('No API key given.');
+      if (!apiKey) fail(hasTerminal() ? 'No API key given.' : noTerminalMessage());
       const { credential } = await call('POST', '/api/credentials', {
         name: arg, provider, apiKey, baseUrl: values['base-url'], authStyle: values.auth,
       });
@@ -511,6 +513,7 @@ async function main(argv: string[]): Promise<void> {
       if (values.auth && values.auth !== 'bearer' && values.auth !== 'x-api-key') fail('--auth must be bearer or x-api-key');
       if (!values.name && !values['base-url'] && !values.auth && !values.key) fail('Nothing to change. Pass --name, --base-url, --auth or --key.');
       const apiKey = values.key ? await promptHidden(`New API key for ${arg}: `) : undefined;
+      if (values.key && apiKey === null) fail(noTerminalMessage());
       if (values.key && !apiKey) fail('No API key given.');
       const { credential } = await call('PATCH', `/api/credentials/${enc(arg)}`, {
         name: values.name, baseUrl: values['base-url'], authStyle: values.auth, apiKey,

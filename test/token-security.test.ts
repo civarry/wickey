@@ -410,7 +410,7 @@ test('an agent holding key A and no passphrase cannot get key B', async () => {
     assert.notEqual(r.code, 0, `wickey ${args.join(' ')} must refuse`);
     assert.ok(!/sk-wick-[A-Za-z0-9_-]{43}/.test(r.out + r.err), `wickey ${args.join(' ')} printed a key`);
   }
-  assert.match((await runCli(['env', 'agent', '--credential', 'work'])).err, /no terminal/);
+  assert.match((await runCli(['env', 'agent', '--credential', 'work'])).err, /This must be done by a human/);
   // Key B is untouched by all of that.
   assert.equal(store.authorize(b.proxy.id, issuedB).ok, true);
   assert.equal(store.listProxies().length, 2, 'nothing was minted');

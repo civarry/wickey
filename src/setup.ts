@@ -5,6 +5,7 @@ import path from 'node:path';
 import { detectEntries, maskSecret, MAX_ENV_BYTES } from './dotenv.ts';
 import { BRAND } from './brand.ts';
 import { config } from './config.ts';
+import { noTerminalMessage } from './human.ts';
 import { hasTerminal, promptHidden, promptVisible } from './prompt.ts';
 import { PROVIDERS, isProvider } from './providers.ts';
 import { createProxyServer } from './proxy.ts';
@@ -66,7 +67,7 @@ export function parsePicks(input: string, allowed: number[], all: number[] = all
 }
 
 export async function runSetup(h: SetupHelpers): Promise<void> {
-  if (!hasTerminal()) h.fail('Setup asks questions, so it needs a terminal. Run `wickey setup` in one, or use `wickey start` and the dashboard.');
+  if (!hasTerminal()) h.fail(noTerminalMessage());
   const { host, port } = config();
   let hosted: http.Server | null = null;
   let external = await isProxyRunning();

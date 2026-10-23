@@ -53,7 +53,7 @@ test('before start opens setup, no token works', async () => {
   for (const body of [{ passphrase: PASS }, { passphrase: PASS, token: '' }, { passphrase: PASS, token: 'guess' }]) {
     const res = await setup(body);
     assert.equal(res.status, 403, JSON.stringify(body));
-    assert.match(res.body.error.message, /setup link printed by `wickey start`/);
+    assert.match(res.body.error.message, /one-time setup link printed by `wickey start`/);
   }
   assert.equal(vaultExists(), false);
 });

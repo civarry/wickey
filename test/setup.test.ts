@@ -33,5 +33,5 @@ test('setup refuses without a terminal and says so', { skip: process.platform ==
   child.stdin.end();
   const code = await new Promise((r) => child.once('exit', r));
   assert.equal(code, 1);
-  assert.match(err, /needs a terminal/);
+  assert.ok(err.includes('This must be done by a human.'));
 });

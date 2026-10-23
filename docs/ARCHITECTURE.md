@@ -230,6 +230,10 @@ All in `src/session.ts`, in memory only.
 
 - **Unlock** derives the key from the passphrase and holds the data key in process memory.
   After a restart the proxy is locked and proxy keys return an error until someone unlocks.
+- **Refusals that need a human** (no terminal; missing session, passphrase or setup token) are worded by
+  `humanRequired()` in `src/human.ts`: "This must be done by a human. If you are an AI agent, stop and ask
+  the user to …" with the exact command (CLI: argv echoed back). API errors keep their `code` and add
+  `humanRequired: true`. A nudge for cooperating agents, not a control.
 - **Setup token.** `POST /api/setup` needs `token`, made by `openSetup()` when `start` runs with no
   vault and no terminal, and printed only as `http://127.0.0.1:<port>/#setup=<token>` on its stdout
   (never in service mode, whose log any same-user program can read). Memory only; `setUp()` clears

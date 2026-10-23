@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { BRAND, envVar } from './brand.ts';
+import { humanRequired } from './human.ts';
 import { signExistingRows, listCredentials } from './store.ts';
 import { WrongPassphraseError, changePassphrase as rewrapVault, createVault, getSecret, isUnlocked, unlockVault, vaultExists, verifyPassphrase } from './vault.ts';
 
@@ -42,13 +43,20 @@ function recordAttempt<T>(fn: () => T): T {
   }
 }
 
+/** Every one of these means a human has to supply something, so the message addresses agents (see human.ts). */
 export class AuthRequiredError extends Error {
   code: 'passphrase_required' | 'setup_required' | 'session_required';
-  constructor(code: 'passphrase_required' | 'setup_required' | 'session_required', message: string) {
-    super(message);
+  readonly humanRequired = true;
+  constructor(code: 'passphrase_required' | 'setup_required' | 'session_required', nextStep: string) {
+    super(humanRequired(nextStep));
     this.code = code;
   }
 }
+
+const SET_PASSPHRASE = `set a passphrase: open the one-time setup link printed by \`${BRAND.command} start\`, or run \`${BRAND.command} setup\` in their own terminal`;
+export const SIGN_IN_STEP = `sign in to the dashboard with their passphrase, or run the ${BRAND.command} command themselves in their own terminal`;
+const UNLOCK_STEP = `unlock Wickey in the dashboard with their passphrase, or run \`${BRAND.command} unlock\` in their own terminal`;
+const PASSPHRASE_STEP = `enter their passphrase in the dashboard, or run the ${BRAND.command} command themselves in their own terminal`;
 
 /** WICKEY_GRACE accepts seconds; 0 turns the grace period off. Read at call time. */
 export function graceSeconds(): number {
@@ -157,15 +165,15 @@ export function setUp(passphrase: string): void {
 
 /** Unlocks the vault (if it isn't already) and starts the grace period. */
 export function unlock(passphrase: string): void {
-  if (!vaultExists()) throw new AuthRequiredError('setup_required', 'Set a passphrase first.');
+  if (!vaultExists()) throw new AuthRequiredError('setup_required', SET_PASSPHRASE);
   recordAttempt(() => (isUnlocked() ? verifyPassphrase(passphrase) : unlockVault(passphrase)));
   startGrace();
 }
 
 /** Passphrase check for a sign-in when the vault is already unlocked (a new browser, or the CLI). */
 export function signIn(passphrase: string): void {
-  if (!vaultExists()) throw new AuthRequiredError('setup_required', 'Set a passphrase first.');
-  if (!isUnlocked()) throw new AuthRequiredError('passphrase_required', 'Wickey is locked. Unlock it with your passphrase first.');
+  if (!vaultExists()) throw new AuthRequiredError('setup_required', SET_PASSPHRASE);
+  if (!isUnlocked()) throw new AuthRequiredError('passphrase_required', UNLOCK_STEP);
   recordAttempt(() => verifyPassphrase(passphrase));
   startGrace();
 }
@@ -176,7 +184,7 @@ export function signIn(passphrase: string): void {
  * Ends the grace period, so the next mint asks for the new passphrase.
  */
 export function changePassphrase(current: string, next: string): void {
-  if (!vaultExists()) throw new AuthRequiredError('setup_required', 'Set a passphrase first.');
+  if (!vaultExists()) throw new AuthRequiredError('setup_required', SET_PASSPHRASE);
   if (!isUnlocked()) throw new Error('Wickey is locked. Unlock it with your passphrase first.');
   recordAttempt(() => rewrapVault(current, next));
   endGrace();
@@ -187,10 +195,10 @@ export function changePassphrase(current: string, next: string): void {
  * passphrase, or without one while the grace period is running.
  */
 export function requireAuth(passphrase?: string): void {
-  if (!vaultExists()) throw new AuthRequiredError('setup_required', 'Set a passphrase first.');
+  if (!vaultExists()) throw new AuthRequiredError('setup_required', SET_PASSPHRASE);
   if (passphrase) return unlock(passphrase);
   if (isUnlocked() && Date.now() < graceUntil) return;
-  throw new AuthRequiredError('passphrase_required', 'Enter your passphrase to continue.');
+  throw new AuthRequiredError('passphrase_required', PASSPHRASE_STEP);
 }
 
 /** All that is safe to tell a caller who has no session: what the sign-in screen needs. */
