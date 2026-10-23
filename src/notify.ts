@@ -142,6 +142,14 @@ const clip = (v: unknown, max = 48): string => {
 const VIA_TEXT: Record<string, string> = { dashboard: 'the dashboard', cli: 'the command line', terminal: 'a terminal', setup_link: 'the setup link' };
 const from = (e: EventEntry): string => VIA_TEXT[str(e.data.via)] ?? 'an unknown source';
 const proxyId = (e: EventEntry): string => clip(e.data.proxyId, 32);
+const APPROVAL_ACTION: Record<string, string> = {
+  'unlock vault': 'unlock the vault',
+  'change passphrase': 'change the passphrase',
+  'turn on presence': 'turn on presence mode',
+  'turn off presence': 'turn off presence mode',
+  'turn off a notification': 'turn off a notification',
+  'repair presence': 'repair presence mode',
+};
 const REVIEW = `review what happened with ${cmd('events')} or the Events page of the dashboard`;
 
 const SPECS: Record<string, Spec> = {
@@ -229,6 +237,70 @@ const SPECS: Record<string, Spec> = {
     describe: (e) => ({
       text: `Wickey found signs of tampering: ${clip(e.data.what) || `the event log failed its anchor check (${clip(e.data.anchor, 24) || 'unknown'})`}.`,
       next: `${REVIEW}, then rotate your keys: ${cmd('rotate <id>')} for proxy keys and the provider's dashboard for real ones`,
+      subject: 'global',
+    }),
+  },
+  presence_used: {
+    label: 'Wickey asked for a system approval (Touch ID or login password)',
+    noun: 'approval requests',
+    describe: (e) => {
+      const result = clip(e.data.result, 16);
+      return {
+        text: `Wickey asked for Touch ID or your login password to ${APPROVAL_ACTION[str(e.data.action)] ?? 'do something sensitive'} (${from(e).replace(/^the /, '')}): ${result || 'unknown result'}.`,
+        next: result === 'approved'
+          ? `run ${cmd('lock')}, then change the passphrase with ${cmd('passphrase')}`
+          : `${REVIEW}; a program on this computer may be asking, so only approve a prompt right after you ran a ${BRAND.command} command or clicked Unlock`,
+        subject: `${clip(e.data.action, 32)}:${result}`,
+      };
+    },
+  },
+  presence_enabled: {
+    label: 'Presence mode was turned on',
+    noun: 'presence mode changes',
+    locked: true,
+    describe: (e) => ({
+      text: `Presence mode was turned on from ${from(e)}. Unlocking now needs your passphrase and an approval.`,
+      next: `change the passphrase with ${cmd('passphrase')} and ${REVIEW}`,
+      subject: 'global',
+    }),
+  },
+  presence_disabled: {
+    label: 'Presence mode was turned off',
+    noun: 'presence mode changes',
+    locked: true,
+    describe: (e) => ({
+      text: `Presence mode was turned off from ${from(e)}. The passphrase alone unlocks the vault again.`,
+      next: `turn it back on with ${cmd('presence enable')} and change the passphrase with ${cmd('passphrase')}`,
+      subject: 'global',
+    }),
+  },
+  presence_repaired: {
+    label: 'Presence mode was repaired',
+    noun: 'presence repairs',
+    locked: true,
+    describe: (e) => ({
+      text: `Presence mode was repaired from ${from(e)}: the helper was rebuilt${e.data.newKey === true ? ' and a new Secure Enclave key was made' : ''}.`,
+      next: `change the passphrase with ${cmd('passphrase')} and ${REVIEW}`,
+      subject: 'global',
+    }),
+  },
+  recovery_used: {
+    label: 'The recovery code was used',
+    noun: 'recovery code uses',
+    locked: true,
+    describe: (e) => ({
+      text: `The presence recovery code was used from ${from(e)}.`,
+      next: `run ${cmd('presence repair')} to get a new recovery code, and change the passphrase with ${cmd('passphrase')}`,
+      subject: 'global',
+    }),
+  },
+  presence_helper_mismatch: {
+    label: 'The presence helper does not match what was recorded',
+    noun: 'presence helper mismatches',
+    locked: true,
+    describe: () => ({
+      text: 'The presence helper is missing or is not the one Wickey built, so the approval was refused.',
+      next: `run ${cmd('presence repair')} if you rebuilt or removed it yourself, otherwise change the passphrase with ${cmd('passphrase')} and ${REVIEW}`,
       subject: 'global',
     }),
   },

@@ -3,6 +3,7 @@
   import { modal } from '../modal.ts';
   import { app } from '../state.svelte.ts';
   import { duration } from '../util.ts';
+  import ApprovalNotice from './ApprovalNotice.svelte';
   import Button from './Button.svelte';
   import Input from './Input.svelte';
 
@@ -48,6 +49,9 @@
             <p class="mt-1 text-[13px] text-text-muted">{body}</p>
           </div>
           <Input label="Passphrase" type="password" autocomplete="current-password" bind:value error={req.reason} />
+          {#if req.approval && app.presenceOn}
+            <ApprovalNotice reason={req.approval.reason} just={req.approval.just} waiting={req.pending} />
+          {/if}
         </div>
       </div>
       <div class="flex justify-end gap-2 border-t border-border px-5 py-3">

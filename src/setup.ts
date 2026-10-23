@@ -87,7 +87,7 @@ export async function runSetup(h: SetupHelpers): Promise<void> {
       for (let i = 0; ; i++) {
         const passphrase = await promptHidden('Wickey passphrase: ');
         if (!passphrase) throw new Cancelled();
-        try { unlock(passphrase); h.rememberPassphrase(passphrase); break; } catch (err) {
+        try { await unlock(passphrase); h.rememberPassphrase(passphrase); break; } catch (err) {
           if (!(err instanceof WrongPassphraseError) || i === 2) throw err;
           console.log('Wrong passphrase.');
         }

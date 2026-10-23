@@ -3,7 +3,12 @@ import { BRAND, envVar } from './brand.ts';
 import { logEvent, type Via } from './audit.ts';
 import { humanRequired } from './human.ts';
 import { signExistingRows, listCredentials } from './store.ts';
-import { WrongPassphraseError, changePassphrase as rewrapVault, createVault, getSecret, isUnlocked, unlockVault, vaultExists, verifyPassphrase } from './vault.ts';
+import { noteUnwrapFailure, presenceOn, usePresence } from './presencemode.ts';
+import type { PresenceAction } from './presence.ts';
+import {
+  PresenceRequiredError, WrongPassphraseError, adoptDataKey, assertNewPassphrase, changePassphrase as rewrapVault, createVault, deriveKek,
+  isUnlocked, openWithPresence, unlockVault, unlockWithRecovery, vaultExists, verifyPassphrase,
+} from './vault.ts';
 
 // Sudo-style grace: after the passphrase is entered, minting keys works without it for a few
 // minutes. During that window ANY program on this computer can mint keys through the running
@@ -38,6 +43,15 @@ function checkThrottle(): void {
   throw new TooManyAttemptsError(wait);
 }
 
+function noteFailure(err: unknown, via: Via): void {
+  if (err instanceof WrongPassphraseError) {
+    logEvent('unlock_failed', { via });
+    failures++;
+    if (failures >= 5) blockedUntil = Date.now() + Math.min(300, 2 ** (failures - 5)) * 1000;
+  }
+  // A cancelled or failed approval is not a guess: it counts for nothing here (it has its own event).
+}
+
 function recordAttempt<T>(via: Via, fn: () => T): T {
   checkThrottle();
   try {
@@ -45,11 +59,20 @@ function recordAttempt<T>(via: Via, fn: () => T): T {
     failures = 0;
     return result;
   } catch (err) {
-    if (err instanceof WrongPassphraseError) {
-      logEvent('unlock_failed', { via });
-      failures++;
-      if (failures >= 5) blockedUntil = Date.now() + Math.min(300, 2 ** (failures - 5)) * 1000;
-    }
+    noteFailure(err, via);
+    throw err;
+  }
+}
+
+/** For attempts that wait for an approval. Only one approval can be open at a time (presencemode.ts), so attempts cannot pile up behind the same stale throttle check. */
+async function recordAttemptAsync<T>(via: Via, fn: () => Promise<T>): Promise<T> {
+  checkThrottle();
+  try {
+    const result = await fn();
+    failures = 0;
+    return result;
+  } catch (err) {
+    noteFailure(err, via);
     throw err;
   }
 }
@@ -68,6 +91,21 @@ const SET_PASSPHRASE = `set a passphrase: open the one-time setup link printed b
 export const SIGN_IN_STEP = `sign in to the dashboard with their passphrase, or run the ${BRAND.command} command themselves in their own terminal`;
 const UNLOCK_STEP = `unlock Wickey in the dashboard with their passphrase, or run \`${BRAND.command} unlock\` in their own terminal`;
 const PASSPHRASE_STEP = `enter their passphrase in the dashboard, or run the ${BRAND.command} command themselves in their own terminal`;
+
+/** Presence mode is on, but this process has no way to check a passphrase until someone signs in once with an approval. */
+function needsApprovalSignIn(): AuthRequiredError {
+  return new AuthRequiredError('passphrase_required', `sign in to the dashboard or run any ${BRAND.command} command themselves, and approve the system prompt (this Wickey was unlocked with a recovery code, so it cannot check the passphrase yet)`);
+}
+
+/** Runs a synchronous passphrase check, turning "needs an approval first" into the sign-in message. */
+function guardApproval<T>(fn: () => T): T {
+  try {
+    return fn();
+  } catch (err) {
+    if (err instanceof PresenceRequiredError) throw needsApprovalSignIn();
+    throw err;
+  }
+}
 
 /** WICKEY_GRACE accepts seconds; 0 turns the grace period off. Read at call time. */
 export function graceSeconds(): number {
@@ -180,8 +218,15 @@ export function setUp(passphrase: string, via: Via = 'terminal'): void {
  * Unlocks the vault (if it isn't already) and starts the grace period. `session` is true when the
  * caller goes on to create a session (dashboard or CLI): then an already-unlocked vault is a sign-in.
  */
-export function unlock(passphrase: string, via: Via = 'terminal', session = false): void {
+export function unlock(passphrase: string, via: Via = 'terminal', session = false): void | Promise<void> {
   if (!vaultExists()) throw new AuthRequiredError('setup_required', SET_PASSPHRASE);
+  // With presence mode on the unlock waits for a human to approve a system prompt, so it is async;
+  // without it nothing changes and the call completes before returning.
+  if (presenceOn()) return unlockWithApproval(passphrase, via, session);
+  unlockPlain(passphrase, via, session);
+}
+
+function unlockPlain(passphrase: string, via: Via, session: boolean): void {
   const wasUnlocked = isUnlocked();
   recordAttempt(via, () => (wasUnlocked ? verifyPassphrase(passphrase) : unlockVault(passphrase)));
   startGrace();
@@ -189,11 +234,64 @@ export function unlock(passphrase: string, via: Via = 'terminal', session = fals
   else if (session) logEvent('signed_in', { via });
 }
 
+/**
+ * Presence mode: scrypt first (so the prompt appears only once the passphrase work is done), then the
+ * approval, then the unwrap. An unwrap that fails after an approval counts as a wrong passphrase:
+ * there is deliberately no passphrase-only check on disk, because it would allow offline guessing.
+ * A sign-in while unlocked is checked against the in-memory verifier and asks for nothing.
+ */
+async function checkWithApproval(passphrase: string, via: Via, wasUnlocked: boolean, action: PresenceAction = 'unlock vault'): Promise<void> {
+  if (wasUnlocked) {
+    try {
+      return verifyPassphrase(passphrase);
+    } catch (err) {
+      if (!(err instanceof PresenceRequiredError)) throw err;
+    }
+  }
+  const kekBuf = deriveKek(passphrase);
+  const secret = await usePresence(action, via);
+  let dk: Buffer;
+  try {
+    dk = openWithPresence(kekBuf, secret);
+  } catch (err) {
+    if (err instanceof WrongPassphraseError) noteUnwrapFailure(action, via);
+    throw err;
+  }
+  adoptDataKey(dk, kekBuf);
+}
+
+async function unlockWithApproval(passphrase: string, via: Via, session: boolean): Promise<void> {
+  const wasUnlocked = isUnlocked();
+  await recordAttemptAsync(via, () => checkWithApproval(passphrase, via, wasUnlocked));
+  startGrace();
+  if (!wasUnlocked) logEvent('unlocked', { via });
+  else if (session) logEvent('signed_in', { via });
+}
+
+/** Terminal only (the CLI refuses without one). Opens the vault with the recovery code when the Secure Enclave key cannot be used. */
+export function unlockWithRecoveryCode(code: string, via: Via = 'cli'): void {
+  if (!vaultExists()) throw new AuthRequiredError('setup_required', SET_PASSPHRASE);
+  if (!presenceOn()) throw new Error(`Presence mode is off, so there is no recovery code. Unlock with your passphrase (\`${BRAND.command} unlock\`).`);
+  if (isUnlocked()) throw new Error('Wickey is already unlocked. Nothing to recover.');
+  recordAttempt(via, () => unlockWithRecovery(code));
+  startGrace();
+  logEvent('recovery_used', { via, purpose: 'unlock' }, 'warn');
+  logEvent('unlocked', { via });
+}
+
 /** Passphrase check for a sign-in when the vault is already unlocked (a new browser, or the CLI). */
-export function signIn(passphrase: string, via: Via = 'dashboard'): void {
+export function signIn(passphrase: string, via: Via = 'dashboard'): void | Promise<void> {
   if (!vaultExists()) throw new AuthRequiredError('setup_required', SET_PASSPHRASE);
   if (!isUnlocked()) throw new AuthRequiredError('passphrase_required', UNLOCK_STEP);
+  if (presenceOn()) return signInWithApproval(passphrase, via);
   recordAttempt(via, () => verifyPassphrase(passphrase));
+  startGrace();
+  logEvent('signed_in', { via });
+}
+
+/** No prompt while this process holds the verifier from the approved unlock; one prompt if it has none (unlocked by recovery code, or presence turned on elsewhere before any unlock here). */
+async function signInWithApproval(passphrase: string, via: Via): Promise<void> {
+  await recordAttemptAsync(via, () => checkWithApproval(passphrase, via, true));
   startGrace();
   logEvent('signed_in', { via });
 }
@@ -203,10 +301,28 @@ export function signIn(passphrase: string, via: Via = 'dashboard'): void {
  * program could take over the vault during the window. Wrong guesses count toward the throttle.
  * Ends the grace period, so the next mint asks for the new passphrase.
  */
-export function changePassphrase(current: string, next: string, via: Via = 'dashboard'): void {
+export function changePassphrase(current: string, next: string, via: Via = 'dashboard'): void | Promise<void> {
   if (!vaultExists()) throw new AuthRequiredError('setup_required', SET_PASSPHRASE);
   if (!isUnlocked()) throw new Error('Wickey is locked. Unlock it with your passphrase first.');
+  if (presenceOn()) return changeWithApproval(current, next, via);
   recordAttempt(via, () => rewrapVault(current, next));
+  endGrace();
+  logEvent('passphrase_changed', { via });
+}
+
+async function changeWithApproval(current: string, next: string, via: Via): Promise<void> {
+  assertNewPassphrase(current, next); // before the prompt: no approval for a change that cannot happen
+  await recordAttemptAsync(via, async () => {
+    // A wrong current passphrase is refused before anyone is asked to approve anything.
+    try { verifyPassphrase(current); } catch (err) { if (!(err instanceof PresenceRequiredError)) throw err; }
+    const secret = await usePresence('change passphrase', via);
+    try {
+      rewrapVault(current, next, secret);
+    } catch (err) {
+      if (err instanceof WrongPassphraseError) noteUnwrapFailure('change passphrase', via);
+      throw err;
+    }
+  });
   endGrace();
   logEvent('passphrase_changed', { via });
 }
@@ -219,7 +335,13 @@ export function confirmPassphrase(passphrase: string | undefined, via: Via = 'da
   if (!vaultExists()) throw new AuthRequiredError('setup_required', SET_PASSPHRASE);
   if (!isUnlocked()) throw new AuthRequiredError('passphrase_required', UNLOCK_STEP);
   if (!passphrase) throw new AuthRequiredError('passphrase_required', PASSPHRASE_STEP);
-  recordAttempt(via, () => verifyPassphrase(passphrase));
+  recordAttempt(via, () => guardApproval(() => verifyPassphrase(passphrase)));
+}
+
+/** confirmPassphrase, plus an approval when presence mode is on: for actions that must not ride on a stolen passphrase alone (turning an alert off). */
+export async function confirmWithApproval(passphrase: string | undefined, action: PresenceAction, via: Via = 'dashboard'): Promise<void> {
+  confirmPassphrase(passphrase, via);
+  if (presenceOn()) await usePresence(action, via);
 }
 
 /**
@@ -229,14 +351,21 @@ export function confirmPassphrase(passphrase: string | undefined, via: Via = 'da
 export function requireAuth(passphrase?: string, via: Via = 'dashboard'): void {
   if (!vaultExists()) throw new AuthRequiredError('setup_required', SET_PASSPHRASE);
   // Not a sign-in (no session is created here), so only a failure or a real unlock is logged.
-  if (passphrase) return unlock(passphrase, via);
+  if (passphrase) {
+    if (!presenceOn()) return unlockPlain(passphrase, via, false);
+    // Unlocking needs an approval, which these synchronous gates cannot wait for; a session implies an earlier unlock anyway.
+    if (!isUnlocked()) throw new AuthRequiredError('passphrase_required', UNLOCK_STEP);
+    recordAttempt(via, () => guardApproval(() => verifyPassphrase(passphrase)));
+    startGrace();
+    return;
+  }
   if (isUnlocked() && Date.now() < graceUntil) return;
   throw new AuthRequiredError('passphrase_required', PASSPHRASE_STEP);
 }
 
 /** All that is safe to tell a caller who has no session: what the sign-in screen needs. */
 export function publicStatus(signedIn: boolean) {
-  return { vault: vaultExists(), unlocked: isUnlocked(), signedIn };
+  return { vault: vaultExists(), unlocked: isUnlocked(), signedIn, presence: presenceOn() };
 }
 
 export function sessionState() {
@@ -246,5 +375,6 @@ export function sessionState() {
     graceSeconds: graceSeconds(),
     graceRemaining: isUnlocked() ? graceRemaining() : 0,
     credentialsWithoutVault: vaultExists() ? 0 : listCredentials().length,
+    presence: presenceOn(),
   };
 }

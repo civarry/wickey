@@ -309,6 +309,60 @@ and `verifyLog` reports the first bad entry. Honest limits:
   work (silently) and minting or credential changes go ahead with one line on stderr. The `via`
   field is a label the caller sends; a local program can fake it.
 
+## Presence mode (macOS)
+
+Opt-in. With it on, unlocking needs the passphrase **and** a human approving a system prompt (Touch
+ID, login password or Apple Watch) backed by a Secure Enclave key. The point: a copied `vault.json`
+cannot be guessed offline on another machine, because the data key is wrapped under
+`HKDF(scrypt(passphrase) || secret)` and `secret` is produced only by the Secure Enclave of the Mac
+it was made on (an ECDH result hashed to 32 bytes; the private key never leaves the chip). The
+passphrase-only wrap is removed from the file when it is turned on, so the passphrase alone opens
+nothing. There is no on-disk passphrase verifier either: it would let someone with the file guess
+the passphrase offline without the chip.
+
+What changes in the threat model:
+
+- **Offline guessing of a copied vault.** Without the Secure Enclave secret (or the recovery code)
+  the passphrase cannot even be tested. This is the main benefit.
+- **A same-user program can still raise a genuine prompt.** The approval proves a human approved a
+  system prompt, not that Wickey asked. A program that asks the same key for an approval, with its own
+  wording, gets the same secret if you say yes. The rule Wickey teaches: only approve a Wickey
+  prompt right after you clicked Unlock or ran a `wickey` command. Every request is logged and
+  notified (`presence_used`, with `approved`, `cancelled`, `failed` or `not available`), so a stray
+  prompt is visible afterwards. Presence also does not stop a program that already reads the
+  passphrase from your keystrokes and waits for you to approve something.
+- **Helper integrity.** The helper is compiled and ad-hoc signed under `~/.wickey/bin/`. Its SHA-256
+  is recorded in `vault.json` and checked before **every** use; a mismatch refuses, logs
+  `presence_helper_mismatch` and notifies. The hash is also part of the additional authenticated
+  data of the presence wrap, so editing `helperSha256` in `vault.json` to match a swapped helper
+  makes the unwrap fail. What this does and does not stop: a program that swaps the helper **and**
+  edits the recorded hash gets a prompt like any program could (it can phrase the prompt as it
+  likes), but the vault will not open for it, and because the recorded hash no longer matches the
+  one in the `presence_enabled` / `presence_repaired` event of the hash-chained event log, the failed unwrap is logged as
+  `presence_helper_mismatch` with `stage: unwrap`. A wrong passphrase and an edited hash fail the
+  same way cryptographically (GCM cannot tell them apart); the event log is what tells them apart.
+- **Throttle.** Order on unlock: scrypt, then the prompt, then the unwrap. A cancelled or failed
+  approval counts as nothing; an unwrap that fails after an approval counts as a wrong
+  passphrase. Only one approval can be open at a time.
+- **Sign-in while unlocked** does not prompt: the proxy keeps an HMAC of the scrypt output under a
+  random per-process key and checks sign-ins against it (memory only, gone on restart or lock).
+  Minting stays on the grace period.
+- **Which actions need an approval:** unlock, passphrase change, turning an alert off,
+  `presence disable`, `presence repair`.
+- **Recovery code.** 160 random bits, shown once at `enable` and `repair`, never stored, logged
+  or notified. It wraps the data key through scrypt, independently of the Secure Enclave key, so it
+  opens the vault alone (`wickey unlock --recovery`, terminal only, logged and notified as
+  `recovery_used`). Whoever holds it can open the vault without the passphrase or this Mac.
+- **Bound to this Mac.** The key cannot be exported or restored on another machine. A Mac that
+  loses it (logic board replacement, erase) needs the recovery code, then `wickey presence repair`.
+- **Enable, disable and repair run in the CLI process** against `vault.json`, like `reset`, not
+  through the proxy: a proxy that is writing a credential at the same instant could overwrite the
+  change (a window of milliseconds). Run them while nothing else is editing credentials.
+- **Known and accepted:** the approval is only as trustworthy as the person approving it; a
+  same-user debugger can still read the unlocked vault from the proxy's memory; offline guessing
+  of the recovery code is not practical (160 bits) but it is a second way in, kept offline.
+- Windows and Linux: not available. Where it isn't, `enable` refuses and nothing changes.
+
 ## Desktop notifications
 
 Some events also raise a desktop notification, so a person sees at once that something
@@ -369,6 +423,7 @@ computer.
 - A local process holding a valid key can use it until it expires or reaches a limit. With
   auto-renew, the maximum lifetime is the real lifetime you approved.
 - Request rate is counted in memory and resets when the proxy restarts.
+- With presence mode on, a forgotten passphrase still has no recovery (the code replaces only the Secure Enclave key), and the recovery code is a second way into the vault: protect it like the passphrase.
 - Windows paths (`CONIN$` prompt, PowerShell output) are not yet verified.
 
 If you find something that contradicts this page, that is worth reporting.

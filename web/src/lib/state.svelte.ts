@@ -24,6 +24,8 @@ interface PassphraseRequest {
   reason: string;
   /** Why it is needed, when the default wording (minting, credentials) would be wrong. */
   purpose?: string;
+  /** Set when the server will also ask for a system approval on this Mac (presence mode). */
+  approval?: api.Approval;
   /** True after submit, until the server answers. */
   pending: boolean;
   resolve: (value: string | null) => void;
@@ -70,6 +72,8 @@ class AppStore {
   credentials = $derived(this.data?.credentials ?? []);
   proxies = $derived(this.data?.proxies ?? []);
   session = $derived(this.data?.session ?? null);
+  /** Presence mode is on: unlock, passphrase change and turning an alert off wait for an approval on this Mac. */
+  presenceOn = $derived((this.data ? this.data.session.presence : this.gateStatus?.presence) === true);
   graceLeft = $derived(Math.max(0, Math.ceil((this.graceEndsAt - this.now) / 1000)));
   /** 'setup' before a vault exists, 'unlock' after a restart, 'signin' when the proxy is unlocked but this browser has no session. */
   gateMode = $derived.by((): 'setup' | 'unlock' | 'signin' | null => {
@@ -90,7 +94,7 @@ class AppStore {
   start(): () => void {
     api.setSessionLostHandler(() => void this.refresh());
     api.setPassphraseAsker(
-      (reason, purpose) => this.askPassphrase(reason, purpose),
+      (reason, purpose, approval) => this.askPassphrase(reason, purpose, approval),
       () => (this.passphraseRequest = null),
     );
     const poll = setInterval(() => void this.refresh(), POLL_MS);
@@ -216,7 +220,7 @@ class AppStore {
     this.confirmRequest = request;
   }
 
-  private askPassphrase(reason: string, purpose?: string): Promise<string | null> {
+  private askPassphrase(reason: string, purpose?: string, approval?: api.Approval): Promise<string | null> {
     // A retry after a wrong passphrase reuses the open dialog and just re-arms it.
     if (this.passphraseRequest) {
       const current = this.passphraseRequest;
@@ -226,11 +230,12 @@ class AppStore {
         current.resolve = waiting ? (v) => (waiting(v), resolve(v)) : resolve;
         current.reason = reason;
         current.purpose = purpose;
+        current.approval = approval;
         current.pending = false;
       });
     }
     return new Promise((resolve) => {
-      this.passphraseRequest = { reason, purpose, pending: false, resolve };
+      this.passphraseRequest = { reason, purpose, approval, pending: false, resolve };
     });
   }
 

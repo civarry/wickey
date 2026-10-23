@@ -3,6 +3,7 @@
   import * as api from '../api.ts';
   import { modal } from '../modal.ts';
   import { app } from '../state.svelte.ts';
+  import ApprovalNotice from './ApprovalNotice.svelte';
   import Button from './Button.svelte';
   import CopyField from './CopyField.svelte';
   import Input from './Input.svelte';
@@ -11,6 +12,8 @@
   const mode = $derived(app.gateMode);
   const setupMode = $derived(mode === 'setup');
   // Setup in the browser needs the one-time link `start` printed; without it the form could only fail.
+  // Presence mode: unlocking waits for an approval on this Mac. Signing in to an already unlocked proxy does not.
+  const approval = $derived(mode === 'unlock' && app.presenceOn);
   const needsLink = $derived(setupMode && !app.setupToken);
 
   let pass = $state('');
@@ -97,7 +100,9 @@
         {#if setupMode}
           <Input label="Repeat passphrase" type="password" bind:value={again} autocomplete="new-password" />
         {/if}
-        {#if error}<p role="alert" class="text-[13px] text-danger-text">{error}</p>{/if}
+        {#if approval}
+          <ApprovalNotice reason="Wickey: unlock vault (dashboard)" just="clicked Unlock" waiting={busy} {error} />
+        {:else if error}<p role="alert" class="text-[13px] text-danger-text">{error}</p>{/if}
         <Button type="submit" variant="primary" {busy} busyLabel={setupMode ? 'Encrypting…' : mode === 'signin' ? 'Signing in…' : 'Unlocking…'} class="w-full">
           {setupMode ? 'Set passphrase' : mode === 'signin' ? 'Sign in' : 'Unlock'}
         </Button>

@@ -1,8 +1,8 @@
 <script lang="ts">
   import Bell from '@lucide/svelte/icons/bell';
   import { describeEvent, integrityText, TRUST_HELP, TRUST_LABEL, TYPE_LABEL, viaLabel } from '../../../../../src/eventtext.ts';
-  import { getEvents } from '../../api.ts';
-  import type { EventEntry, EventsPage as Page } from '../../api.ts';
+  import { getEvents, getPresence } from '../../api.ts';
+  import type { EventEntry, EventsPage as Page, PresenceStatus } from '../../api.ts';
   import { app } from '../../state.svelte.ts';
   import Badge from '../../components/Badge.svelte';
   import Button from '../../components/Button.svelte';
@@ -28,6 +28,10 @@
   let loadingMore = $state(false);
   let extended = false;
   let alertsOpen = $state(false);
+  let presence = $state<PresenceStatus | null>(null);
+  $effect(() => {
+    getPresence().then((p) => (presence = p), () => {});
+  });
 
   // The filter lives in the URL. `gen` drops answers to old queries.
   let gen = 0;
@@ -118,6 +122,18 @@
       {:else}
         <p class="text-[13px] text-text-muted">Checking the log…</p>
       {/if}
+      <!-- Fixed line even before the answer arrives, so it never moves the rows below. -->
+      <p class="mt-1.5 text-xs text-text-muted">
+        {#if !presence}
+          Presence mode: checking…
+        {:else if !presence.enabled}
+          Presence mode: off. A terminal command turns it on: <span class="font-mono text-text">wickey presence enable</span>.
+        {:else if presence.helperOk && presence.keyPresent}
+          Presence mode: on. Unlocking needs your passphrase and an approval on this Mac.
+        {:else}
+          <span class="font-medium text-danger-text">Presence mode: on, but the helper or its key is missing or changed.</span> Run <span class="font-mono text-text">wickey presence repair</span> in a terminal.
+        {/if}
+      </p>
     </div>
     <div class="flex flex-wrap items-center gap-2">
       {#if unseenCount > 0}

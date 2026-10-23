@@ -35,12 +35,13 @@ import { VIA_HEADER, logEvent, viaFromHeader, type Via } from './audit.ts';
 import { entryHash, listEvents, type EventData } from './events.ts';
 import { readEventsSeen, writeEventsSeen, type SeenRead } from './store.ts';
 import { humanRequired } from './human.ts';
+import { presenceStatus } from './presencemode.ts';
 import { isLockedOn, isNotifyType, notificationSettings, setNotificationEnabled } from './notify.ts';
 import { isRollbackFlagged } from './metering.ts';
 import { ensureModels, forceRefreshModels } from './models.ts';
 import {
   AuthRequiredError, SESSION_COOKIE, SIGN_IN_STEP, TooManyAttemptsError, changePassphrase, createSession, endSession, lock, publicStatus,
-  confirmPassphrase, requireAuth, sessionIdFromCookie, sessionState, setUp, setupTokenMatches, signIn, touchSession, unlock,
+  requireAuth, sessionIdFromCookie, sessionState, setUp, setupTokenMatches, signIn, touchSession, unlock, unlockWithRecoveryCode, confirmWithApproval,
 } from './session.ts';
 import { DEFAULT_TTL_SECONDS, parseTtl } from './ttl.ts';
 import { MIN_PASSPHRASE, WrongPassphraseError, isUnlocked, vaultExists } from './vault.ts';
@@ -284,7 +285,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
 
   if (method === 'POST' && path === '/api/signin') {
     const body = await readJson(req, ['passphrase']);
-    signIn(String(body.passphrase ?? ''), via(req));
+    await signIn(String(body.passphrase ?? ''), via(req));
     // A new session each time: a cookie that was sent along is never promoted.
     return json(res, 200, { session: sessionState() }, sessionCookie(createSession()));
   }
@@ -313,8 +314,14 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
   }
 
   if (method === 'POST' && path === '/api/unlock') {
-    const body = await readJson(req, ['passphrase']);
-    unlock(String(body.passphrase ?? ''), via(req), true);
+    const body = await readJson(req, ['passphrase', 'recovery']);
+    if (typeof body.recovery === 'string' && body.recovery) {
+      // The code is shown once in a terminal and typed there; the dashboard has no way to ask for it.
+      if (via(req) !== 'cli') throw new HttpError(403, humanRequired(`run \`${BRAND.command} unlock --recovery\` in their own terminal`), true);
+      unlockWithRecoveryCode(body.recovery, 'cli');
+    } else {
+      await unlock(String(body.passphrase ?? ''), via(req), true);
+    }
     return json(res, 200, { session: sessionState() }, sessionCookie(createSession()));
   }
 
@@ -325,7 +332,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
       throw new HttpError(400, 'Send the current and the new passphrase.');
     }
     if (vaultExists() && !isUnlocked()) throw new HttpError(409, 'Wickey is locked. Unlock it with your passphrase first.');
-    changePassphrase(body.current, body.next, via(req));
+    await changePassphrase(body.current, body.next, via(req));
     return json(res, 200, {
       session: sessionState(),
       message: 'Passphrase changed. Minting is locked: the next key you mint asks for the new passphrase. An old copy of vault.json (a backup, say) still opens with the old passphrase.',
@@ -466,6 +473,9 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
     return json(res, 200, { proxy: updated });
   }
 
+  // Read-only status for the dashboard. Turning presence on, off or repairing it is terminal-only (the recovery code is shown there).
+  if (method === 'GET' && path === '/api/presence') return json(res, 200, await presenceStatus(false));
+
   if (method === 'GET' && path === '/api/notifications') return json(res, 200, notificationSettings());
 
   // Turning a type ON needs only the session. Turning one OFF needs the passphrase in the body even
@@ -476,7 +486,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
     if (typeof body.enabled !== 'boolean') throw new HttpError(400, 'enabled must be true or false.');
     if (!body.enabled) {
       if (isLockedOn(body.type)) throw new HttpError(400, `"${body.type}" notifications cannot be turned off.`);
-      confirmPassphrase(typeof body.passphrase === 'string' ? body.passphrase : undefined, via(req));
+      await confirmWithApproval(typeof body.passphrase === 'string' ? body.passphrase : undefined, 'turn off a notification', via(req));
     }
     setNotificationEnabled(body.type, body.enabled, via(req));
     return json(res, 200, notificationSettings());

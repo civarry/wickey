@@ -3,6 +3,7 @@
   import * as api from '../api.ts';
   import { modal } from '../modal.ts';
   import { app } from '../state.svelte.ts';
+  import ApprovalNotice from './ApprovalNotice.svelte';
   import Button from './Button.svelte';
   import Input from './Input.svelte';
 
@@ -73,7 +74,9 @@
             <Input label="Current passphrase" type="password" bind:value={current} autocomplete="current-password" />
             <Input label="New passphrase" type="password" bind:value={next} autocomplete="new-password" help="At least {MIN_PASSPHRASE} characters. It can't be recovered." />
             <Input label="Repeat new passphrase" type="password" bind:value={again} autocomplete="new-password" />
-            {#if error}<p role="alert" class="text-[13px] text-danger-text">{error}</p>{/if}
+            {#if app.presenceOn}
+              <ApprovalNotice reason="Wickey: change passphrase (dashboard)" just="clicked Change passphrase" waiting={busy} {error} />
+            {:else if error}<p role="alert" class="text-[13px] text-danger-text">{error}</p>{/if}
           </div>
         </div>
         <div class="flex justify-end gap-2 border-t border-border px-5 py-3">

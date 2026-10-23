@@ -35,6 +35,14 @@ export const defaultExec: Exec = (file, args, opts) =>
 
 export type PresenceDeps = { exec?: Exec; platform?: NodeJS.Platform };
 
+// Process-wide defaults for the flows built on top (presencemode.ts). Tests and the dashboard check
+// install a fake helper here so no real system prompt is ever shown; production leaves it empty.
+let injected: PresenceDeps = {};
+export function setPresenceDeps(d: PresenceDeps | null): void {
+  injected = d ?? {};
+}
+const withDefaults = <T extends PresenceDeps>(d: T): T => ({ ...injected, ...d, exec: d.exec ?? injected.exec, platform: d.platform ?? injected.platform });
+
 export class PresenceError extends Error {}
 export class PresenceHelperMismatch extends PresenceError {
   constructor() {
@@ -60,7 +68,8 @@ function firstLines(s: string, n = 5): string {
 }
 
 /** Compile and ad-hoc sign the helper under the data directory. Returns the binary's SHA-256 (hex). */
-export async function buildHelper(deps: PresenceDeps = {}): Promise<string> {
+export async function buildHelper(given: PresenceDeps = {}): Promise<string> {
+  const deps = withDefaults(given);
   const exec = deps.exec ?? defaultExec;
   if ((deps.platform ?? process.platform) !== 'darwin') throw new PresenceError(NOT_MACOS);
   const found = await exec('xcrun', ['--find', 'swiftc'], { timeout: QUICK_MS });
@@ -94,7 +103,8 @@ function parse(stdout: string): Record<string, unknown> | null {
 }
 
 /** Injectable for tests: lets a test simulate a Mac without a Secure Enclave. */
-export async function probe(deps: PresenceDeps = {}): Promise<{ available: boolean; reason?: string }> {
+export async function probe(given: PresenceDeps = {}): Promise<{ available: boolean; reason?: string }> {
+  const deps = withDefaults(given);
   if ((deps.platform ?? process.platform) !== 'darwin') return { available: false, reason: NOT_MACOS };
   const r = await (deps.exec ?? defaultExec)(helperPath(), ['probe'], { timeout: QUICK_MS });
   const j = parse(r.stdout);
@@ -115,6 +125,7 @@ export function verifyHelper(expectedSha256: string): void {
 }
 
 export type PresenceAction =
+  | 'turn on presence'
   | 'unlock vault'
   | 'change passphrase'
   | 'turn off presence'
@@ -126,7 +137,8 @@ export function presenceReason(action: PresenceAction, trigger?: string): string
   return `${BRAND.displayName}: ${action}${trigger ? ` (${trigger})` : ''}`;
 }
 
-async function runQuick(args: string[], deps: PresenceDeps, expectedSha256?: string): Promise<void> {
+async function runQuick(args: string[], given: PresenceDeps, expectedSha256?: string): Promise<void> {
+  const deps = withDefaults(given);
   if (expectedSha256) verifyHelper(expectedSha256);
   const r = await (deps.exec ?? defaultExec)(helperPath(), args, { timeout: QUICK_MS });
   const j = parse(r.stdout);
@@ -150,8 +162,9 @@ export type UseResult =
 export async function useKey(
   dir: string,
   reason: string,
-  opts: PresenceDeps & { expectedSha256: string; noUi?: boolean },
+  given: PresenceDeps & { expectedSha256: string; noUi?: boolean },
 ): Promise<UseResult> {
+  const opts = withDefaults(given);
   verifyHelper(opts.expectedSha256);
   const args = ['use', dir, '--reason', reason];
   if (opts.noUi) args.push('--no-ui');

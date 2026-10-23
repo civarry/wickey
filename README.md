@@ -233,7 +233,8 @@ script Wickey.
 | `start` | Run the proxy and dashboard on `127.0.0.1:7777`. Asks for your passphrase, or sets one up on first run |
 | `setup` | Guided first run: passphrase, credentials (add or import a `.env`), start on login. Needs a terminal; every step is skippable |
 | `service install\|uninstall\|status` | Start the proxy when you log in. It starts locked. Windows is experimental |
-| `unlock` | Unlock a running proxy and start the grace period |
+| `unlock [--recovery]` | Unlock a running proxy and start the grace period. With presence mode on it also needs your approval of a system prompt; `--recovery` unlocks with the recovery code instead (terminal only) |
+| `presence status\|enable\|disable\|repair` | Presence mode (macOS, opt-in, see below). Terminal only, except `status` |
 | `lock` | End the grace period now and sign every dashboard tab out (no passphrase needed) |
 | `passphrase` | Change the passphrase. Asks (hidden) for the current one, even during the grace period, then the new one twice |
 | `notifications [on <type>\|off <type>\|test]` | Desktop alerts for security events (unlock, passphrase change, reset, repeated wrong passphrases, unlimited keys, looser limits, auto-renew, tampering). Lists them with no argument; `off` asks for the passphrase in a terminal, even during the grace period; `test` shows one. macOS and Linux (`notify-send`); Windows not yet |
@@ -433,6 +434,57 @@ program with no session still cannot. Keep the window short, and lock when you s
 Wrong passphrases are throttled: after 5 misses, each further attempt waits twice as long as the
 last, up to 5 minutes.
 
+## Presence mode (macOS, opt-in)
+
+**What it gives you: a copied `vault.json` can't be guessed offline on another machine.** With
+presence mode on, the vault's data key is wrapped under your passphrase *and* a secret that only
+this Mac's Secure Enclave can produce, and only after you approve a system prompt (Touch ID, your
+login password or an Apple Watch). The passphrase-only wrap is removed from the file. Someone who
+copies the vault (a backup, a synced folder, a stolen disk image) can't open it by guessing the
+passphrase, because the other half of the key never leaves your Mac's chip.
+
+**What it does not do.** The approval proves that *you* said yes to a genuine system prompt. It does
+not prove that *Wickey* asked: any program running as you can ask the same Secure Enclave key for an
+approval and phrase the prompt however it likes. So the rule is one line:
+
+> Only approve a Wickey prompt right after you clicked Unlock or ran a `wickey` command.
+
+If a prompt appears out of nowhere, press Cancel. Wickey logs every approval request (approved,
+cancelled or failed) in the event log and as a desktop notification, so a stray prompt leaves a
+trace you can read with `wickey events`.
+
+```bash
+wickey presence enable     # passphrase + one approval, then the recovery code (shown once)
+wickey presence status     # on or off, helper ok, Secure Enclave available, key present
+wickey presence disable    # passphrase + approval; back to passphrase-only
+wickey presence repair     # rebuild the helper from this package and record it again
+wickey unlock --recovery   # unlock with the recovery code when the key is unusable
+```
+
+When it is on, these ask for an approval (the prompt says what it is for, for example
+`Wickey: unlock vault (dashboard)`): unlocking, changing the passphrase, turning an alert off,
+`presence disable` and `presence repair`. Signing in to a proxy that is already unlocked, and
+minting keys during the grace period, do not. The dashboard shows a waiting message while the
+prompt is open and a plain message if you cancel. It also shows whether presence mode is on (Events
+page). Turning it on, off or repairing it is terminal-only, because the recovery code is shown there.
+
+**Recovery code.** `enable` (and `repair`) prints a 160-bit code once, in groups of four. Write it
+down or save it in a password manager, not in a file on this computer. Wickey keeps no copy and
+never logs it. It opens the vault by itself if the Secure Enclave key is lost (a logic board
+replacement, a reset): run `wickey unlock --recovery`, then `wickey presence repair` to make a new
+key and a new code. Anyone who has the code can open the vault without the passphrase or the Mac,
+so keep it as carefully as the passphrase.
+
+**The key is bound to this Mac.** A vault copied to another computer needs the recovery code there.
+
+**Requirements.** macOS on a Mac with a Secure Enclave (Apple silicon, or an Intel Mac with a T2
+chip), and the Xcode Command Line Tools (`xcode-select --install`) once, because `enable` compiles a
+small helper from `native/presence.swift` and signs it ad hoc. Without them `enable` says so and
+changes nothing. Windows and Linux: not yet.
+
+Details and limits are in [SECURITY.md](SECURITY.md#presence-mode-macos) and
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#presence-mode).
+
 ## Change or reset the passphrase
 
 `wickey passphrase` (or **Change passphrase** in the dashboard header) re-wraps the vault's
@@ -446,7 +498,8 @@ change, so a backup, a Time Machine snapshot or any other earlier copy stays rea
 passphrase it had back then. If an old passphrase was exposed, delete those copies. Changing the
 passphrase does not fix a leaked one for copies already made.
 
-There is no recovery. If you forget the passphrase, stop the proxy and run `wickey reset`: it
+There is no recovery for a forgotten passphrase (the presence-mode recovery code replaces the Secure
+Enclave key, not the passphrase). If you forget the passphrase, stop the proxy and run `wickey reset`: it
 lists what will be deleted (the vault, all credentials, all proxies and their activity log) and
 asks you to type `reset`. **Your real provider keys are not revoked**; they stay valid at the
 provider, so revoke or rotate them there if needed. Then `wickey start` sets a new passphrase,

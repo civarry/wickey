@@ -116,6 +116,7 @@ const ROUTES: [string, string][] = [
   ['PATCH', '/api/proxies/abcd1234/limits'],
   ['GET', '/api/events'],
   ['POST', '/api/events/seen'],
+  ['GET', '/api/presence'],
   ['GET', '/api/notifications'],
   ['PATCH', '/api/notifications'],
   ['GET', '/api/requests'],
@@ -156,7 +157,7 @@ test('every /api route answers 401 session_required without a session, and works
     assert.equal(ok.status, 200, `${method} ${p} with a session`);
   }
   const status = await raw({ path: '/api/session-status' });
-  assert.deepEqual(status.body, { vault: true, unlocked: true, signedIn: false }, 'the open status route carries no proxy or credential data');
+  assert.deepEqual(status.body, { vault: true, unlocked: true, signedIn: false, presence: false }, 'the open status route carries no proxy or credential data');
   assert.equal((await raw({ path: '/api/session-status', headers: { cookie } })).body.signedIn, true);
   for (const p of store.listProxies()) store.deleteProxy(p.id);
 });
@@ -462,7 +463,7 @@ test('a restart signs everyone out: an old cookie is dead, and unlock starts a n
     const res = await raw({ path: '/api/state', port: childPort, headers: { cookie } });
     assert.equal(res.status, 401);
     assert.equal(res.body.error.code, 'session_required');
-    assert.deepEqual((await raw({ path: '/api/session-status', port: childPort, headers: { cookie } })).body, { vault: true, unlocked: false, signedIn: false });
+    assert.deepEqual((await raw({ path: '/api/session-status', port: childPort, headers: { cookie } })).body, { vault: true, unlocked: false, signedIn: false, presence: false });
     const unlocked = await raw({ method: 'POST', path: '/api/unlock', port: childPort, body: { passphrase: PASS } });
     assert.equal(unlocked.status, 200);
     assert.equal((await raw({ path: '/api/state', port: childPort, headers: { cookie: cookieOf(unlocked) } })).status, 200);

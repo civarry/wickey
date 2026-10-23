@@ -3,7 +3,7 @@ import { BRAND } from './brand.ts';
 import { config } from './config.ts';
 import { parseModelsFlag } from './models.ts';
 import { PROVIDERS, isProvider } from './providers.ts';
-import { humanRequired, noTerminalMessage } from './human.ts';
+import { commandLine, humanRequired, noTerminalMessage } from './human.ts';
 import { hasTerminal, promptHidden, promptVisible, readPiped } from './prompt.ts';
 import { RotatingLog, hardenDataDir, redirectOutput } from './logfile.ts';
 import { createProxyServer } from './proxy.ts';
@@ -11,6 +11,8 @@ import { isProxyRunning, performReset, planReset } from './reset.ts';
 import { runServiceCommand } from './service.ts';
 import { VIA_HEADER } from './audit.ts';
 import { graceSeconds, openSetup, setUp, unlock } from './session.ts';
+import { NOT_MACOS, PresenceError, presenceReason, type PresenceAction } from './presence.ts';
+import { PresenceRefused, disablePresenceMode, enablePresenceMode, presenceStatus, repairPresenceMode } from './presencemode.ts';
 import { runSetup } from './setup.ts';
 import { eventLine, integrityText, TYPE_LABEL } from './eventtext.ts';
 import { currentNotifier } from './notify.ts';
@@ -30,7 +32,8 @@ Server
   start                  Run the proxy and dashboard on http://127.0.0.1:${config().port} (${BRAND.envPrefix}PORT to change).
                          Asks for your passphrase (or sets one up on first run).
                          --service: how the start-on-login service runs it (no prompts, starts locked, own log file).
-  unlock                 Unlock a running proxy and start the grace period
+  unlock [--recovery]    Unlock a running proxy and start the grace period. With presence mode on this also needs
+                         an approval on this Mac. --recovery unlocks with the recovery code instead (terminal only).
   lock                   End the grace period now and sign every session out (no passphrase needed)
   passphrase             Change the passphrase (asks for the current one even during the grace period)
   events [--all] [--type <t>] [--json]
@@ -41,6 +44,12 @@ Server
   notifications off <type>   Turn one type off. Asks for the passphrase in a terminal, even during the grace period.
   notifications on <type>    Turn one type back on.
   notifications test     Show one test notification.
+  presence status | enable | disable | repair
+                         Presence mode (macOS, opt-in): unlocking needs the passphrase AND your approval of a system
+                         prompt (Touch ID, login password or Apple Watch) backed by a Secure Enclave key, so a copied
+                         vault.json cannot be guessed offline on another machine. Needs a terminal. enable prints a
+                         recovery code once. repair rebuilds the helper and re-records it. Only approve a Wickey
+                         prompt right after you clicked Unlock or ran a wickey command.
   reset                  Forgot the passphrase? Delete the vault and all data, then set up again.
                          Asks for confirmation in a terminal, with the proxy stopped. Provider keys are not revoked.
 
@@ -166,6 +175,17 @@ async function failAfterSignOut(message: string): Promise<never> {
   return fail(message);
 }
 
+/** Tells the person, before the system prompt appears, exactly what it will say and when to approve it. Best effort. */
+async function approvalHint(action: PresenceAction): Promise<void> {
+  try {
+    const res = await fetch(url('/api/session-status'), { headers: { [BRAND.requestHeader]: '1', [VIA_HEADER]: 'cli' } });
+    const j: any = await res.json();
+    if (j?.presence === true) {
+      process.stderr.write(`Presence mode is on. Approve the system prompt that says "${presenceReason(action, 'cli')}". Only approve it if you just ran this command.\n`);
+    }
+  } catch { /* the proxy may not be running; the real request reports that */ }
+}
+
 async function askPassphrase(): Promise<string> {
   const passphrase = await promptHidden('Wickey passphrase: ');
   if (passphrase === null) return failAfterSignOut(noTerminalMessage());
@@ -183,6 +203,7 @@ async function ensureSession(reprompt = true): Promise<void> {
     let data = await res.json().catch(() => ({}));
     // A locked proxy (after a restart) cannot sign anyone in; the passphrase unlocks it.
     if (res.status === 401 && data.error?.code === 'passphrase_required') {
+      await approvalHint('unlock vault');
       res = await send('POST', '/api/unlock', { passphrase }, null);
       data = await res.json().catch(() => ({}));
     }
@@ -367,7 +388,7 @@ async function start(asService: boolean): Promise<void> {
         break;
       }
       try {
-        unlock(passphrase);
+        await unlock(passphrase);
         console.log(`Unlocked. ${graceNote()}`);
         break;
       } catch (err) {
@@ -416,6 +437,7 @@ async function main(argv: string[]): Promise<void> {
       'allow-uncapped': { type: 'boolean' },
       'refuse-uncapped': { type: 'boolean' },
       service: { type: 'boolean' },
+      recovery: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -445,15 +467,86 @@ async function main(argv: string[]): Promise<void> {
       });
 
     case 'unlock': {
+      if (values.recovery) {
+        if (!hasTerminal()) fail(humanRequired(`run \`${commandLine()}\` in their own terminal (the dashboard cannot take a recovery code)`));
+        const code = await promptHidden('Recovery code: ');
+        if (!code) fail('Cancelled.');
+        const res = await send('POST', '/api/unlock', { recovery: code }, null);
+        const data = await res.json().catch(() => ({}));
+        cli.cookie = cookieFrom(res);
+        if (!res.ok) await failAfterSignOut(data.error?.message ?? `Unlock failed (${res.status}).`);
+        console.log(`Unlocked with the recovery code. ${graceNote()}`);
+        console.log(`Run \`${BRAND.command} presence repair\` now: it makes a new recovery code (this one is spent) and, if the Secure Enclave key is gone, a new key.`);
+        return;
+      }
       const passphrase = await promptHidden('Wickey passphrase: ');
       if (passphrase === null) fail(noTerminalMessage());
       if (!passphrase) fail('Cancelled.');
+      await approvalHint('unlock vault');
       // Unlock hands back a session, which this command has no use for.
       const res = await send('POST', '/api/unlock', { passphrase }, null);
       const data = await res.json().catch(() => ({}));
       cli.cookie = cookieFrom(res);
       if (!res.ok) await failAfterSignOut(data.error?.message ?? `Unlock failed (${res.status}).`);
       console.log(`Unlocked. ${graceNote()}`);
+      return;
+    }
+
+    case 'presence': {
+      if (arg === 'status') {
+        const st = await presenceStatus(true);
+        console.log(`Presence mode: ${st.enabled ? 'on' : 'off'}`);
+        if (process.platform !== 'darwin') {
+          console.log(`This computer: ${NOT_MACOS}`);
+          return;
+        }
+        console.log(`Helper: ${st.enabled ? (st.helperOk ? 'ok (matches the recorded hash)' : `missing or changed. Run \`${BRAND.command} presence repair\`.`) : st.helperOk ? 'built' : 'not built yet'}`);
+        console.log(`Secure Enclave: ${st.available === null ? 'unknown (no usable helper to ask)' : st.available ? 'available' : `not available. ${st.availableReason ?? ''}`.trim()}`);
+        console.log(`Secure Enclave key: ${st.keyPresent ? 'present' : st.enabled ? `missing. Run \`${BRAND.command} presence repair\` with your recovery code.` : 'none'}`);
+        if (!st.enabled) console.log(`\nTurn it on with \`${BRAND.command} presence enable\`.`);
+        return;
+      }
+      if (arg !== 'enable' && arg !== 'disable' && arg !== 'repair') fail('Usage: wickey presence status | enable | disable | repair');
+      // The recovery code and the passphrase are typed or shown in a terminal only; the dashboard cannot do this.
+      if (!hasTerminal()) fail(humanRequired(`run \`${commandLine()}\` in their own terminal`));
+      if (!vaultExists()) fail(`There is no vault yet. Run \`${BRAND.command} setup\` first.`);
+      const passphrase = await promptHidden('Wickey passphrase: ');
+      if (!passphrase) fail('Cancelled.');
+      const showCode = (code: string, header: string) => {
+        console.log(`\n${header}\n\n  ${code}\n`);
+        console.log('It opens the vault if the Secure Enclave key is ever lost. It is shown only this once and Wickey keeps no copy.');
+        console.log('Write this down or save it in a password manager, not in a file on this computer.');
+      };
+      try {
+        if (arg === 'enable') {
+          console.log(`macOS will ask you to approve a system prompt that says "${presenceReason('turn on presence', 'terminal')}". Approve it with Touch ID, your login password or Apple Watch.`);
+          const { recoveryCode } = await enablePresenceMode(passphrase);
+          console.log('Presence mode is on. Unlocking Wickey now needs your passphrase and an approval on this Mac.');
+          console.log('One rule: only approve a Wickey prompt right after you clicked Unlock or ran a wickey command. Any program on this computer can raise the same prompt, and approving it proves you said yes, not that Wickey asked.');
+          showCode(recoveryCode, 'Your recovery code:');
+        } else if (arg === 'disable') {
+          console.log(`macOS will ask you to approve a system prompt that says "${presenceReason('turn off presence', 'terminal')}".`);
+          await disablePresenceMode(passphrase);
+          console.log('Presence mode is off. The passphrase alone unlocks the vault again, and the recovery code no longer works.');
+        } else {
+          console.log('Rebuilding the helper from this package. macOS may ask you to approve a system prompt that says "Wickey: repair presence (terminal)".');
+          const r = await repairPresenceMode(passphrase, async () => {
+            console.log('The Secure Enclave key cannot be used. Enter your recovery code to make a new one.');
+            const recoveryCode = await promptHidden('Recovery code: ');
+            if (!recoveryCode) fail('Cancelled. Nothing was changed.');
+            // The passphrase cannot be checked without the key, so a typo here would lock you in. Type it twice.
+            const again = await promptHidden('Repeat the passphrase to be sure: ');
+            if (again !== passphrase) fail("The passphrases didn't match. Nothing was changed.");
+            return { passphrase, recoveryCode };
+          });
+          console.log(r.usedRecovery ? 'Presence mode is repaired with a new Secure Enclave key.' : 'Presence mode is repaired: the helper is rebuilt and recorded.');
+          showCode(r.recoveryCode, 'Your NEW recovery code (the old one no longer works):');
+        }
+      } catch (err) {
+        if (err instanceof WrongPassphraseError) fail(`${err.message} Nothing was changed.`);
+        if (err instanceof PresenceRefused || err instanceof PresenceError) fail(`${err.message} Nothing was changed.`);
+        throw err;
+      }
       return;
     }
 
@@ -476,6 +569,7 @@ async function main(argv: string[]): Promise<void> {
       if ((await promptHidden('Repeat new passphrase: ')) !== next) fail("The new passphrases didn't match. Nothing was changed.");
       // Its own passphrases, so the generic "ask for the passphrase and retry" loop must stay off.
       cli.passphrase = current;
+      await approvalHint('change passphrase');
       const data = await call('POST', '/api/passphrase', { current, next }, false);
       console.log(data.message);
       return;
@@ -501,6 +595,7 @@ async function main(argv: string[]): Promise<void> {
           if (!typed) fail('Cancelled.');
           cli.passphrase = typed;
           passphrase = typed;
+          await approvalHint('turn off a notification');
         }
         const data = await call('PATCH', '/api/notifications', { type, enabled: sub === 'on', ...(passphrase ? { passphrase } : {}) });
         console.log(`Notifications for ${type} are ${sub}.${data.backend.available ? ' A notification about this change was sent.' : ''}`);

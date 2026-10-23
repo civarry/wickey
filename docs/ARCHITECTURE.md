@@ -14,6 +14,8 @@ dependencies.
 | `src/api.ts` | Dashboard page and `/api/*`, with Host, Origin and header checks |
 | `src/session.ts` | Setup, unlock, sign-in, in-memory sessions, grace period, `requireAuth`, wrong-passphrase throttle |
 | `src/vault.ts` | Encrypted `vault.json`, the in-memory keys, row-signing HMAC |
+| `src/presence.ts`, `native/presence.swift` | Presence mode, macOS: builds and signs the Secure Enclave helper (`buildHelper`), `probe`, `verifyHelper` (hash check before every use), `createKey` / `useKey` / `deleteKey`, the prompt wording `presenceReason`. Everything through `execFile` with argument arrays; `setPresenceDeps` injects a fake helper for tests |
+| `src/presencemode.ts` | The flows around it: `usePresence` (one approval at a time, logs `presence_used`, `presence_helper_mismatch`), `enablePresenceMode`, `disablePresenceMode`, `repairPresenceMode`, `presenceStatus`. Used by `session.ts` and the CLI |
 | `src/events.ts` | Security event log (`events.log`): hash-chained, MAC-authenticated JSON Lines, `verifyLog`, `listEvents`, `checkpoint`, the anchor (`checkAnchor`, `guardAnchor`). `src/keychain.ts` is the macOS Keychain backend (injectable via `setKeychain`). `src/audit.ts` is the call-site helper (`logEvent`, the `via` label); session.ts and api.ts emit the events |
 | `src/eventtext.ts` | Plain-words wording for events (`describeEvent`, trust labels, integrity text, banner buckets `bannerKey`/`summarizeUnseen`). Pure, imported by the CLI, the server and the dashboard so they cannot disagree |
 | `src/notify.ts` | Desktop notifications for security events: `Notifier` backends (macOS `osascript`, Linux `notify-send`), per-type switches (signed `notification_settings` row), coalescing. Called from `appendEvent` |
@@ -311,6 +313,25 @@ newest `reset`.
   makes the wrong key and the unwrap fails.
 - Real keys and the DK are never written to disk in plaintext.
 
+With **presence mode** on (macOS, opt-in) the file changes shape and nothing else does:
+
+```
+{
+  "version": 1,
+  "kdf": { ... },
+  "presence": {
+    "helperSha256": "<hex>",
+    "keyDir": "presence",
+    "dk": { iv, tag, data },            DK under HKDF(scrypt(passphrase) || secret), AAD wickey/v1/dk-presence/<helperSha256>
+    "recovery": { "kdf": {...}, "dk": { iv, tag, data } }   DK under scrypt(recovery code), AAD wickey/v1/dk-recovery
+  },
+  "secrets": { ... }
+}
+```
+
+There is no `dk` field then: the passphrase alone opens nothing. A vault without `presence` is
+exactly the format above, and turning it off writes that format back (one atomic write each way).
+
 ### wickey.db (SQLite, mode 600; the -wal and -shm files are tightened to 600 too)
 
 | Table | Columns of note |
@@ -398,6 +419,44 @@ then marks that label's expired proxies `cleaned_at` (hidden from lists, row and
 unsigned because it only affects display; renew and rotate refuse them). Several active proxies may share a label, one per
 terminal; nothing is reused or revived. A rejected request (bad limit, bad TTL) cleans nothing,
 because the mint happens first.
+
+## Presence mode
+
+Opt-in, macOS only. Code: `native/presence.swift` (a Secure Enclave P-256 key, `userPresence`
+access control; `use` returns SHA-256 of the ECDH with a stored peer public key, a 32-byte secret),
+`src/presence.ts` (build, probe, hash check, exec), `src/presencemode.ts` (flows, events),
+`src/vault.ts` (the wraps), `src/session.ts` (where it hooks in).
+
+- **Unlock** (`session.unlock`, async only when presence is on; otherwise it completes before it
+  returns): throttle check, `deriveKek` (scrypt), `usePresence('unlock vault', via)` (verifies the
+  helper's SHA-256 against `vault.json`, shows the prompt, waits up to 90 s), `openWithPresence`
+  (HKDF of KEK and secret opens the wrap), `adoptDataKey`. A failed unwrap counts as a wrong
+  passphrase; a cancel, a busy prompt or an unavailable prompt counts as nothing.
+  `noteUnwrapFailure` compares the hash in `vault.json` with the one in the newest
+  `presence_enabled` / `presence_repaired` event and logs `presence_helper_mismatch` (`stage: unwrap`) when
+  they differ.
+- **Verifier.** Each unlock and passphrase change stores `HMAC(processKey, scrypt output)` in
+  memory (`vault.ts`). Sign-ins while unlocked, `confirmPassphrase` and `requireAuth` check against
+  it, so they never prompt. A process unlocked by recovery code has none: the first sign-in asks for
+  one approval and sets it. Nothing like it is on disk.
+- **Passphrase change** verifies `current` against the verifier first (no prompt for a typo), asks
+  for an approval, then re-wraps the presence wrap under the new KEK with the same secret; the
+  recovery wrap does not change. **Turning an alert off** is `confirmWithApproval`.
+- **CLI** (`presence enable|disable|repair|status`, `unlock --recovery`): terminal only except
+  status. `enable|disable|repair` run in the CLI process (like `reset`): they verify the passphrase,
+  build and hash the helper, create the key, ask for the approval, and rewrite `vault.json` once.
+  `repair` rebuilds the helper, re-records the hash and a new recovery code; if the key is gone it
+  checks the recovery code first, then creates a new key. `unlock --recovery` posts the code to
+  `POST /api/unlock` (accepted only with the CLI's `x-wickey-via: cli` label); the code is never
+  logged, only `recovery_used`.
+- **API.** `GET /api/presence` (session; enabled, helper ok, key present) and a `presence` flag on
+  `GET /api/session-status` and the session state so the dashboard can show the waiting message.
+  The unlock, sign-in and passphrase requests simply stay open while the prompt is open.
+- **Events** (all notify; the ones that change protection cannot be switched off):
+  `presence_used {action, result, via}`, `presence_enabled`, `presence_disabled`, `presence_repaired`,
+  `recovery_used`, `presence_helper_mismatch {stage: use | unwrap}`.
+- **Tests** use `test/fake-presence.ts`, a stand-in for the helper's executable injected with
+  `setPresenceDeps`; no test ever shows a real prompt. `test/presence-mode.test.ts` covers the flows.
 
 ## Dashboard and its API checks
 

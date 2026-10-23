@@ -140,8 +140,15 @@ describe('real helper (macOS with swiftc)', { skip: !hasSwiftc() && 'needs macOS
     assert.deepEqual(await p.probe(), { available: true });
   });
 
-  test('create writes 0600 files; use --no-ui fails with -1004 and never prompts', async () => {
-    await p.createKey(keyDir, { expectedSha256: hash });
+  test('create writes 0600 files; use --no-ui fails with -1004 and never prompts', async (t) => {
+    try {
+      await p.createKey(keyDir, { expectedSha256: hash });
+    } catch (err) {
+      // -25308 (errSecInteractionNotAllowed): no unlocked GUI session (screen locked, ssh, CI).
+      // Creating the key never prompts but still needs one; that is the environment, not a bug.
+      if (/-25308/.test(String((err as Error).message))) return t.skip('needs an unlocked GUI session');
+      throw err;
+    }
     for (const f of ['key.handle', 'peer.key']) assert.equal(fs.statSync(path.join(keyDir, f)).mode & 0o777, 0o600);
     const r = await p.useKey(keyDir, p.presenceReason('unlock vault', 'test'), { expectedSha256: hash, noUi: true });
     assert.ok(!r.ok && r.reason === 'not-interactive' && r.code === -1004, JSON.stringify(r));

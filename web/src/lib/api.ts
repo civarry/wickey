@@ -112,6 +112,8 @@ export interface SessionStatus {
   vault: boolean;
   unlocked: boolean;
   signedIn: boolean;
+  /** Presence mode (macOS): unlocking also needs an approval on this Mac. */
+  presence: boolean;
 }
 
 export interface SessionState {
@@ -120,6 +122,21 @@ export interface SessionState {
   graceSeconds: number;
   graceRemaining: number;
   credentialsWithoutVault: number;
+  presence: boolean;
+}
+
+/** Read-only. Turning presence mode on, off or repairing it is terminal-only (`wickey presence ...`). */
+export interface PresenceStatus {
+  enabled: boolean;
+  helperOk: boolean;
+  keyPresent: boolean;
+}
+export const getPresence = () => request<PresenceStatus>('GET', '/api/presence');
+
+/** A system prompt the person must approve for this action: what it will say and when it is right to approve it. */
+export interface Approval {
+  reason: string;
+  just: string;
 }
 
 export interface ProviderPreset {
@@ -213,7 +230,7 @@ export class ApiError extends Error {
 }
 
 /** Resolves with the passphrase, or null if the user cancelled. `reason` is shown after a wrong try. */
-export type PassphraseAsker = (reason: string, purpose?: string) => Promise<string | null>;
+export type PassphraseAsker = (reason: string, purpose?: string, approval?: Approval) => Promise<string | null>;
 let asker: PassphraseAsker | null = null;
 let onSettled: (() => void) | null = null;
 /** Requests currently waiting on or retrying with the passphrase prompt. */
@@ -261,7 +278,7 @@ async function plain<T>(method: string, path: string, body?: object): Promise<T>
 }
 
 /** When the server wants the passphrase, ask for it and retry; the prompt stays open on a wrong one. */
-async function request<T>(method: string, path: string, body?: object, purpose?: string): Promise<T> {
+async function request<T>(method: string, path: string, body?: object, purpose?: string, approval?: Approval): Promise<T> {
   let r = await raw(method, path, body);
   let reason = '';
   let asked = false;
@@ -272,7 +289,7 @@ async function request<T>(method: string, path: string, body?: object, purpose?:
         asked = true;
         askers++;
       }
-      const passphrase = await asker(reason, purpose);
+      const passphrase = await asker(reason, purpose, approval);
       if (passphrase === null) throw new Cancelled();
       r = await raw(method, path, { ...(body ?? {}), passphrase });
       reason = r.data.error?.code === 'wrong_passphrase' ? 'Wrong passphrase. Try again.' : '';
@@ -381,4 +398,4 @@ export interface NotificationSettings {
 export const getNotifications = () => request<NotificationSettings>('GET', '/api/notifications');
 /** Turning one off needs the passphrase even in the grace period: the server answers 401 and `request` asks for it. */
 export const setNotification = (type: string, enabled: boolean) =>
-  request<NotificationSettings>('PATCH', '/api/notifications', { type, enabled }, enabled ? undefined : 'Needed to turn off an alert. Alerts are how you hear about someone else acting on your behalf.');
+  request<NotificationSettings>('PATCH', '/api/notifications', { type, enabled }, enabled ? undefined : 'Needed to turn off an alert. Alerts are how you hear about someone else acting on your behalf.', enabled ? undefined : { reason: 'Wickey: turn off a notification (dashboard)', just: 'turned an alert off' });

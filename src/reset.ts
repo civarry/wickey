@@ -64,7 +64,7 @@ export async function isProxyRunning(): Promise<boolean> {
 export function performReset(): void {
   const { home, dbPath } = config();
   const plan = planReset();
-  const targets = [path.join(home, 'vault.json'), dbPath, `${dbPath}-wal`, `${dbPath}-shm`];
+  const targets = [path.join(home, 'vault.json'), path.join(home, 'vault.json.lock'), dbPath, `${dbPath}-wal`, `${dbPath}-shm`];
   if (fs.existsSync(home)) {
     for (const f of fs.readdirSync(home)) if (/^vault\.json\..*\.tmp$/.test(f)) targets.push(path.join(home, f));
   }

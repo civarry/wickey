@@ -80,6 +80,16 @@ export function describeEvent(e: EventLike): string {
     case 'credential_removed': return `The credential${quoted(d.name)} was removed.`;
     case 'credentials_imported': return `${typeof d.count === 'number' ? d.count : 'Some'} credential${d.count === 1 ? ' was' : 's were'} imported.`;
     case 'notifications_changed': return `Notifications for "${clipText(d.type, 32)}" were turned ${d.enabled === true ? 'on' : 'off'}.`;
+    case 'presence_used': {
+      const result = clipText(d.result, 16);
+      const what = clipText(d.action, 40) || 'something';
+      return `Wickey asked for a system approval to ${what}: ${result || 'unknown result'}.`;
+    }
+    case 'presence_enabled': return 'Presence mode was turned on: unlocking needs the passphrase and a system approval.';
+    case 'presence_disabled': return 'Presence mode was turned off: the passphrase alone unlocks the vault.';
+    case 'presence_repaired': return `Presence mode was repaired: the helper was rebuilt${d.newKey === true ? ' and a new Secure Enclave key was made' : ''}.`;
+    case 'recovery_used': return 'The presence recovery code was used.';
+    case 'presence_helper_mismatch': return `The presence helper did not match what was recorded, so the approval was refused${d.stage === 'unwrap' ? ' (the vault would not open after the approval)' : ''}.`;
     case 'tamper_detected': {
       if (typeof d.what === 'string') return `Signs of tampering: the stored ${clipText(d.what, 48)} failed its signature check.`;
       const why = ANCHOR_WORDS[clipText(d.anchor, 24)];
@@ -110,6 +120,12 @@ export const TYPE_LABEL: Record<string, string> = {
   credential_removed: 'Credential removed',
   credentials_imported: 'Credentials imported',
   notifications_changed: 'Notifications changed',
+  presence_used: 'Approval asked',
+  presence_enabled: 'Presence on',
+  presence_disabled: 'Presence off',
+  presence_repaired: 'Presence repaired',
+  recovery_used: 'Recovery code used',
+  presence_helper_mismatch: 'Presence helper mismatch',
   tamper_detected: 'Tampering detected',
 };
 
@@ -126,6 +142,8 @@ export function bannerKey(e: EventLike): string | null {
   if (ROUTINE.has(e.type)) return null;
   if (e.type === 'key_issued') return e.data?.unlimited === true || e.data?.models === 'all' ? 'key_unrestricted' : null;
   if (e.type === 'key_renewed') return null;
+  // An approved approval is routine (every unlock has one); a cancelled or failed one may be a program asking.
+  if (e.type === 'presence_used') return e.data?.result === 'approved' ? null : 'presence_used';
   return e.type;
 }
 
@@ -144,6 +162,12 @@ const PHRASE: Record<string, [string, string]> = {
   credential_removed: ['credential removed', 'credentials removed'],
   credentials_imported: ['import', 'imports'],
   notifications_changed: ['notification change', 'notification changes'],
+  presence_used: ['approval that was not given', 'approvals that were not given'],
+  presence_enabled: ['presence mode turned on', 'presence mode turned on'],
+  presence_disabled: ['presence mode turned off', 'presence mode turned off'],
+  presence_repaired: ['presence repair', 'presence repairs'],
+  recovery_used: ['recovery code use', 'recovery code uses'],
+  presence_helper_mismatch: ['presence helper mismatch', 'presence helper mismatches'],
   tamper_detected: ['tamper detection', 'tamper detections'],
 };
 
