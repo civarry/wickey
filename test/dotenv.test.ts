@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { detectEntries, maskSecret, MAX_ENV_BYTES, parseDotenv } from '../web/src/lib/dotenv.ts';
+import { detectEntries, maskSecret, MAX_ENV_BYTES, parseDotenv } from '../src/dotenv.ts';
 import { PROVIDERS } from '../src/providers.ts';
 
 const detect = (text: string) => detectEntries(text, PROVIDERS);

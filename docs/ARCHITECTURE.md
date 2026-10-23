@@ -8,7 +8,7 @@ dependencies.
 
 | File | Role |
 | --- | --- |
-| `bin/wickey.js` | Entry point; imports `src/cli.ts` |
+| `bin/wickey.js` | Entry point; imports `dist/cli.js` in the published package (compiled on pack), `src/cli.ts` in a checkout |
 | `src/cli.ts` | Commands. Read-only ones read SQLite; state changes call the running proxy's API |
 | `src/proxy.ts` | HTTP server: `/health`, then the dashboard and API, then `/p/<id>/...` forwarding |
 | `src/api.ts` | Dashboard page and `/api/*`, with Host, Origin and header checks |
@@ -304,7 +304,7 @@ requests that are provably from the dashboard, and then only with a session (abo
 - Stored values such as proxy names are rendered as text, not HTML. Proxy names are also
   restricted so the copyable "Shell profile" line cannot carry a shell command.
 - The stored real key is never sent back to the browser.
-- **Import from .env.** `web/src/lib/dotenv.ts` (pure, so tests import it) parses the file in the
+- **Import from .env.** `src/dotenv.ts` (pure, so the dashboard, `setup` and tests all import it) parses the file in the
   tab; unticked and unrelated variables never leave it. `POST /api/credentials/import` takes at most
   50 entries and `dryRun: true|false`. Both modes go through `requireAuth`, because even a preview
   reveals whether a key is already stored. Each entry is validated like a normal add, handled on

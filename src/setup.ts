@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import type http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { detectEntries, maskSecret, MAX_ENV_BYTES } from '../web/src/lib/dotenv.ts';
+import { detectEntries, maskSecret, MAX_ENV_BYTES } from './dotenv.ts';
 import { BRAND } from './brand.ts';
 import { config } from './config.ts';
 import { hasTerminal, promptHidden, promptVisible } from './prompt.ts';

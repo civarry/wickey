@@ -23,3 +23,11 @@ jobs:
       - run: npm ci
       - run: npx tsc
       - run: npm test
+      # Node won't run TypeScript from node_modules, so prove the published shape (compiled dist/) works.
+      - name: Packed install runs
+        shell: bash
+        run: |
+          npm pack --pack-destination "$RUNNER_TEMP"
+          mkdir "$RUNNER_TEMP/smoke" && cd "$RUNNER_TEMP/smoke" && npm init -y > /dev/null
+          npm install "$RUNNER_TEMP"/wickey-*.tgz
+          npx wickey --help

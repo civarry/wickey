@@ -57,7 +57,8 @@ npm run check        # svelte-check for the dashboard
 npm run dev:web      # Vite dev server for web/, proxying to a running backend
 ```
 
-Node runs the TypeScript source directly. There is no build step.
+Node runs the TypeScript source directly. There is no build step in development; `npm pack` compiles
+`src/` to `dist/` for the published package, because Node won't run `.ts` files from `node_modules`.
 
 ### Run against a throwaway instance
 

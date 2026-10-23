@@ -3,8 +3,8 @@
   import FileUp from '@lucide/svelte/icons/file-up';
   import { Cancelled, importCredentials } from '../../api.ts';
   import type { ImportEntryInput, ImportResult } from '../../api.ts';
-  import { detectEntries, maskSecret, MAX_ENV_BYTES } from '../../dotenv.ts';
-  import type { EnvEntry } from '../../dotenv.ts';
+  import { detectEntries, maskSecret, MAX_ENV_BYTES } from '../../../../../src/dotenv.ts';
+  import type { EnvEntry } from '../../../../../src/dotenv.ts';
   import { app } from '../../state.svelte.ts';
   import { plural, providerLabel } from '../../util.ts';
   import Badge from '../../components/Badge.svelte';

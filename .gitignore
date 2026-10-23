@@ -39,6 +39,7 @@ npm-debug.log*
 # Dependencies and build output
 node_modules/
 web/dist/
+/dist/
 *.tsbuildinfo
 .vite/
 coverage/

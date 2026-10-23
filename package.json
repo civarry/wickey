@@ -1,7 +1,7 @@
 {
   "name": "wickey",
   "version": "0.1.0",
-  "description": "Local proxy that hands out short-lived LLM API keys from an encrypted, passphrase-locked vault. Works on macOS, Windows and Linux.",
+  "description": "Local proxy that hands out short-lived, limited LLM API keys from an encrypted, passphrase-locked vault.",
   "type": "module",
   "bin": {
     "wickey": "bin/wickey.js"
@@ -11,10 +11,11 @@
   },
   "files": [
     "bin",
-    "src",
+    "dist",
     "web/dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "SECURITY.md"
   ],
   "scripts": {
     "start": "node src/cli.ts start",
@@ -24,7 +25,9 @@
     "dev:web": "vite --config web/vite.config.ts",
     "check": "svelte-check --workspace web --tsconfig ./tsconfig.json",
     "prepare": "npm run build",
-    "prepublishOnly": "npm run build"
+    "build:cli": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build && npm run build:cli",
+    "postpack": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
   },
   "devDependencies": {
     "@fontsource-variable/inter": "^5.3.0",
@@ -39,5 +42,23 @@
     "typescript": "^5.9.0",
     "vite": "^8.3.5"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/civarry/wickey.git"
+  },
+  "homepage": "https://github.com/civarry/wickey#readme",
+  "bugs": {
+    "url": "https://github.com/civarry/wickey/issues"
+  },
+  "keywords": [
+    "llm",
+    "api-keys",
+    "proxy",
+    "ai-agents",
+    "secrets",
+    "openai",
+    "anthropic",
+    "vault"
+  ]
 }
