@@ -286,7 +286,9 @@ requests that are provably from the dashboard, and then only with a session (abo
 - `/api/*` also requires the header `x-wickey: 1`, which forces a CORS preflight the server never approves.
   These three checks run before the session check and stay even though the cookie exists: browsers
   treat every port on 127.0.0.1 as one site, so another local web page would be sent the cookie.
-- Request bodies are limited to 64 KB.
+- Request bodies are limited to 64 KB, must be a JSON object, and may carry only the fields the
+  route reads (plus `passphrase` where it calls `requireAuth`); anything else is a 400 naming the
+  field. Base URLs in responses always use `127.0.0.1`, whatever `Host` the dashboard was opened with.
 - The dashboard asks `GET /api/session-status` first when it has no data, and shows setup, unlock or
   sign-in from that. Any 401 `session_required` (Lock elsewhere, idle expiry) drops its data and
   returns to the gate. A full proxy key reaches the browser only in the issue/rotate response; the

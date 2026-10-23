@@ -9,6 +9,24 @@ a `.env` file, a log, or an agent's context.
 > output, `CONIN$` terminal prompt, the Task Scheduler start-on-login) but nobody has verified them. Subscription sign-in (ChatGPT,
 > Claude Pro/Max) is planned, not built.
 
+## Quickstart
+
+Needs Node.js 24+ and a terminal (the passphrase prompts read from it).
+
+```sh
+npm install -g wickey
+wickey start                                     # sets your passphrase; leave it running
+
+# in a second terminal
+wickey add openai --provider openai              # paste your real key at the hidden prompt
+eval "$(wickey issue openai --ttl 10m --env)"    # sets OPENAI_BASE_URL and OPENAI_API_KEY
+curl "$OPENAI_BASE_URL/models" -H "Authorization: Bearer $OPENAI_API_KEY"
+```
+
+That request went through Wickey with a key that dies in 10 minutes. Anything that reads
+`OPENAI_BASE_URL` and `OPENAI_API_KEY` (the OpenAI SDKs, most agents) now works the same way.
+Prefer clicking? Open `http://127.0.0.1:7777/` while `start` runs.
+
 ## Why Wickey
 
 If you run AI agents, your API key probably lives in a `.env` file or an `export` in your shell
@@ -186,6 +204,19 @@ through unchanged, so `BASE_URL/chat/completions` reaches `https://api.openai.co
 The proxy key can be sent as `Authorization: Bearer` or `x-api-key`, so OpenAI-style and Anthropic
 SDKs work unchanged. Env lines use `OPENAI_*` for `openai`, `openrouter` and `custom`, and
 `ANTHROPIC_*` for `anthropic`.
+
+### No terminal?
+
+Commands that change anything need a terminal for the passphrase prompt, on purpose: a background
+job (cron, CI, an agent's subprocess) can't answer it, so it can't mint keys. Without a terminal:
+
+- **Use the dashboard** at `http://127.0.0.1:7777/` in a browser. It covers credentials, keys and limits,
+  and asks for the passphrase in the page.
+- **For an unattended job**, issue a key for it from a terminal or the dashboard, with the limits
+  that job needs (models, rate, token cap), and hand that key to the job.
+
+The dashboard's `/api` is internal: it can change between versions and is not a supported way to
+script Wickey.
 
 ### Commands
 
