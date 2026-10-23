@@ -277,17 +277,32 @@ vault's data key) on entries written while unlocked. It exists so a same-user pr
 passphrase cannot quietly edit, delete, reorder or forge events: those break the chain or the MACs,
 and `verifyLog` reports the first bad entry. Honest limits:
 
-- **Truncating the tail is not detected.** Removing the newest entries leaves a consistent chain.
-  An anchor outside the data directory is planned to close this.
+- **The anchor.** The newest entry that has a MAC is also recorded outside the log: in
+  `events.anchor` (with a MAC, so it cannot be forged without the passphrase) and, on macOS, as a
+  Keychain item (service `dev.wickey.events`, plain value so it survives a reset). Both are
+  rewritten after every signed append and checked, once the vault is unlocked, before anything is
+  appended or checkpointed. This catches: cutting entries off the end (`truncated`), rewriting the
+  log, including as a self-consistent chain of unsigned entries that the next checkpoint would
+  have signed (`mismatch`), deleting the anchor file (`missing`), and rolling back the file and the
+  log but not the Keychain item (`rolled_back`). A reset followed by cutting the old entries is
+  caught through the Keychain copy. Each detection appends a signed `tamper_detected` entry that
+  stays in the log, prints one line to stderr, and makes `verifyLog` report `ok: false` until the
+  record is written (afterwards the anchor follows the new head and the notes count detections).
+- **Not detected: rolling back `events.log`, `events.anchor` AND the Keychain item together to an
+  older genuine state.** The Keychain item has no access control, so any same-user program can
+  rewrite it with `security`. Elsewhere than macOS there is only the file copy, so rolling back the
+  log and the file together goes unnoticed. If the Keychain is unavailable (not macOS, a locked
+  keychain, a 2 s timeout, `WICKEY_KEYCHAIN=0`, or under `node --test`) the check quietly relies
+  on the file alone.
 - **Entries written while locked (failed unlocks) carry no MAC.** A local program could add such
   entries. They are shown as "recorded while locked" and only become part of the authenticated
-  chain when the next unlock appends a checkpoint; they are never presented as verified. The
-  checkpoint signs whatever unsigned chain precedes it, so until the anchor exists, a program that
-  rewrites the log as unsigned entries gets that rewrite folded in at the next unlock. The anchor
-  must be checked before any checkpoint is written.
+  chain when the next unlock appends a checkpoint; they are never presented as verified. The anchor
+  is checked before that checkpoint, so a wholesale rewrite is flagged instead of signed in, but
+  unsigned entries appended after the anchor are still folded in by the checkpoint.
 - **Entries from before a `wickey reset` cannot have their MACs checked** (the key is gone). They
-  are labelled "before reset, integrity not verifiable". A program that rewrites the whole file
-  with no MACs and a fake `reset` at the end is not detectable until the anchor exists.
+  are labelled "before reset, integrity not verifiable". The Keychain copy still ties them to the
+  genuine log on macOS; without it, a program that rewrites the whole file with no MACs and a fake
+  `reset` at the end is not detectable after a real reset.
 - The file is readable by any same-user program; `data` is limited to ids, names and limits, never
   keys, tokens or passphrases. While the vault is locked only hashes and links are checked.
 - Logging is a record, not a gate: if the file cannot be written, unlock, sign-in and lock still

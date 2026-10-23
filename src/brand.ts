@@ -13,6 +13,10 @@ export const BRAND = {
   dataDirName: '.wickey',
   dbFileName: 'wickey.db',
   eventsFileName: 'events.log',
+  /** Newest-signed-entry record kept next to events.log (see events.ts). */
+  eventsAnchorFileName: 'events.anchor',
+  /** macOS Keychain service holding the second copy of the anchor. */
+  keychainService: 'dev.wickey.events',
   /** Prefix of every configuration environment variable (HOME, PORT, GRACE, ...). */
   envPrefix: 'WICKEY_',
   launchdLabel: 'dev.wickey.proxy',

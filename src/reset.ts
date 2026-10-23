@@ -68,6 +68,8 @@ export function performReset(): void {
   if (fs.existsSync(home)) {
     for (const f of fs.readdirSync(home)) if (/^vault\.json\..*\.tmp$/.test(f)) targets.push(path.join(home, f));
   }
+  // The anchor file is MAC'd with the key that is about to disappear. The Keychain copy stays on purpose.
+  targets.push(config().anchorFile);
   for (const t of targets) fs.rmSync(t, { force: true });
   appendEvent('reset', { credentials: plan.credentials.length, proxies: plan.proxies }, { signed: false });
 }

@@ -56,6 +56,7 @@ function rehash(e: any): void {
 }
 function fresh(unlocked = true): void {
   fs.rmSync(logFile, { force: true });
+  fs.rmSync(path.join(home, 'events.anchor'), { force: true });
   if (!vault.vaultExists()) vault.createVault(PASS);
   if (unlocked) vault.unlockVault(PASS);
   else vault.lockVault();

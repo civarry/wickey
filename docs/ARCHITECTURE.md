@@ -14,7 +14,7 @@ dependencies.
 | `src/api.ts` | Dashboard page and `/api/*`, with Host, Origin and header checks |
 | `src/session.ts` | Setup, unlock, sign-in, in-memory sessions, grace period, `requireAuth`, wrong-passphrase throttle |
 | `src/vault.ts` | Encrypted `vault.json`, the in-memory keys, row-signing HMAC |
-| `src/events.ts` | Security event log (`events.log`): hash-chained, MAC-authenticated JSON Lines, `verifyLog`, `listEvents`, `checkpoint`. `src/audit.ts` is the call-site helper (`logEvent`, the `via` label); session.ts and api.ts emit the events |
+| `src/events.ts` | Security event log (`events.log`): hash-chained, MAC-authenticated JSON Lines, `verifyLog`, `listEvents`, `checkpoint`, the anchor (`checkAnchor`, `guardAnchor`). `src/keychain.ts` is the macOS Keychain backend (injectable via `setKeychain`). `src/audit.ts` is the call-site helper (`logEvent`, the `via` label); session.ts and api.ts emit the events |
 | `src/store.ts` | SQLite (`node:sqlite`): credentials, proxies, usage totals, request log, row signatures, issue/renew/rotate, limits, auto-renew |
 | `src/metering.ts` | Usage parsing (JSON and SSE, OpenAI and Anthropic shapes), the decoded response side copy, rate limiter, in-flight reservations, usage high-water marks, error bodies in OpenAI or Anthropic format |
 | `src/prompt.ts` | Hidden passphrase prompt (and a visible one for confirmations) via `/dev/tty` or `CONIN$` |
@@ -214,6 +214,23 @@ companion event:
 passes `setup_link`. It is a display label: a local program can send any value, so it is not proof.
 Logging is a record, not a gate (`logEvent`): a failed write never blocks unlock, sign-in or lock
 (silent), and for minting and credential changes it prints one line to stderr and carries on.
+
+### events.log anchor (`events.anchor`, macOS Keychain)
+
+The newest entry with a MAC is recorded as `{seq, hash}` outside the log: `events.anchor` (mode
+600, written via temp file + rename, plus `mac = eventMac("wickey-anchor:<seq>:<hash>")`) and, on
+macOS, a Keychain generic password (service `BRAND.keychainService`, account = first 32 hex of
+SHA-256 of the data directory, value `<seq>:<hash>`, no MAC so it outlives a reset). `/usr/bin/security`
+is run with `execFile` argument arrays, a 2 s timeout and no stdin; any failure means "unavailable",
+never an alarm. Off under `node --test` (NODE_TEST_CONTEXT) unless `WICKEY_KEYCHAIN=1`, and with `WICKEY_KEYCHAIN=0`. `appendEvent` rewrites both after
+each signed append. `anchorCheck()` (when unlocked) returns `ok`, `missing`, `truncated`, `mismatch`,
+`rolled_back` or `unchecked` (locked): the file's MAC and its entry's hash and MAC are checked, then
+the Keychain entry's hash. `guardAnchor()` runs before every signed append and before `checkpoint()`;
+on a failure it appends a signed `tamper_detected` (`anchor`, `expectedSeq`, `expectedHash` prefix,
+`foundSeq`) first, which also moves the anchor on. `verifyLog()`/`listEvents()` summaries carry
+`anchor` and are not ok for any failing status. `performReset()` deletes `events.anchor` and leaves
+the Keychain item. Signed entries with no anchor count as `missing` only if they come after the
+newest `reset`.
 
 ### vault.json (mode 600, written by atomic rename)
 

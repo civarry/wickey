@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.ts';
+import { defaultKeychain, type Keychain } from './keychain.ts';
 import { eventMac, isUnlocked, verifyEventMac } from './vault.ts';
 
 // Security event log: an append-only JSON Lines file (`events.log`) that a same-user program
@@ -11,8 +12,13 @@ import { eventMac, isUnlocked, verifyEventMac } from './vault.ts';
 // while locked (failed unlocks) have no MAC: the next unlock appends a `checkpoint` whose MAC
 // covers the head, which authenticates the chain up to it.
 //
-// Known limit: dropping entries off the END of the file is not detectable from the file alone
-// (the shorter chain is still consistent). The planned anchor outside the data directory fixes it.
+// The anchor (`{seq, hash}` of the newest entry that has a MAC) is kept outside the log: in
+// `events.anchor` (with a MAC, so it cannot be forged without the passphrase) and, on macOS, in the
+// Keychain (plain, so it survives a reset). It is rewritten after every signed append and checked
+// before anything is appended or checkpointed once the vault is unlocked. That catches truncation
+// (the log ends before the anchor), laundering (the log was rewritten as unsigned entries that a
+// checkpoint would otherwise sign) and rolling back only some of the copies. Rolling back the log,
+// the file AND the Keychain item together is not detected.
 //
 // `data` must hold ids, names and limits only. Never a key, token, passphrase or provider secret.
 
@@ -44,6 +50,17 @@ export interface LogSummary {
   beforeReset: number;
   whileLocked: number;
   notes: string[];
+  anchor: AnchorStatus;
+}
+
+export type AnchorStatus = 'ok' | 'missing' | 'truncated' | 'mismatch' | 'rolled_back' | 'unchecked';
+
+export interface AnchorCheck {
+  status: AnchorStatus;
+  expectedSeq?: number;
+  expectedHash?: string;
+  /** Newest seq actually present in the log. */
+  foundSeq: number;
 }
 
 export interface LoggedEvent extends EventEntry { trust: Trust }
@@ -86,6 +103,135 @@ function parse(line: string): EventEntry | null {
   }
 }
 
+// ---- anchor ----
+
+let keychain: Keychain | null = null;
+/** Tests inject a fake; pass null to go back to the default. */
+export function setKeychain(k: Keychain | null): void {
+  keychain = k;
+}
+function kc(): Keychain {
+  return (keychain ??= defaultKeychain());
+}
+/** Account = hash of the data directory, so a test home never collides with the real one. */
+function kcAccount(): string {
+  return createHash('sha256').update(config().home).digest('hex').slice(0, 32);
+}
+
+const anchorMessage = (seq: number, hash: string) => `wickey-anchor:${seq}:${hash}`;
+
+function readAnchorFile(): { seq: number; hash: string; mac: string } | 'bad' | null {
+  let text: string;
+  try {
+    text = fs.readFileSync(config().anchorFile, 'utf8');
+  } catch {
+    return null;
+  }
+  try {
+    const a = JSON.parse(text);
+    if (Number.isInteger(a?.seq) && a.seq >= 1 && typeof a.hash === 'string' && typeof a.mac === 'string') return a;
+  } catch { /* fall through */ }
+  return 'bad';
+}
+
+function readKeychainAnchor(): { seq: number; hash: string } | null {
+  const r = kc().get(kcAccount());
+  if (r.state !== 'ok') return null;
+  const m = /^(\d+):([0-9a-f]{64})$/.exec(r.value);
+  return m ? { seq: Number(m[1]), hash: m[2] } : null;
+}
+
+/** Both copies, after a signed append. Never throws: logging is a record, not a gate. */
+function writeAnchor(e: EventEntry): void {
+  if (e.mac === null) return;
+  try {
+    const f = config().anchorFile;
+    const tmp = `${f}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ seq: e.seq, hash: e.hash, mac: eventMac(anchorMessage(e.seq, e.hash)) }) + '\n', { mode: 0o600 });
+    fs.renameSync(tmp, f);
+  } catch {
+    process.stderr.write('wickey: the event log anchor file could not be written.\n');
+  }
+  try {
+    kc().set(kcAccount(), `${e.seq}:${e.hash}`);
+  } catch { /* unavailable: the file copy still stands */ }
+}
+
+function anchorCheck(): AnchorCheck {
+  if (!isUnlocked()) return { status: 'unchecked', foundSeq: 0 };
+  const entries = lines(rawText()).map(parse).filter((e): e is EventEntry => e !== null);
+  const bySeq = new Map(entries.map((e) => [e.seq, e]));
+  const foundSeq = entries.reduce((n, e) => Math.max(n, e.seq), 0);
+  const resetSeq = entries.reduce((n, e) => (e.type === 'reset' ? Math.max(n, e.seq) : n), 0);
+  const out = (status: AnchorStatus, a?: { seq: number; hash: string }): AnchorCheck =>
+    ({ status, foundSeq, ...(a ? { expectedSeq: a.seq, expectedHash: a.hash } : {}) });
+  /** Does the log hold this entry? */
+  const against = (a: { seq: number; hash: string }, checkMac: boolean): AnchorStatus => {
+    const e = bySeq.get(a.seq);
+    if (!e) return 'truncated';
+    if (e.hash !== a.hash) return 'mismatch';
+    if (checkMac && !verifyEventMac(e.hash, e.mac)) return 'mismatch';
+    return 'ok';
+  };
+
+  const file = readAnchorFile();
+  let fileAnchor: { seq: number; hash: string } | null = null;
+  if (file === 'bad') return out('mismatch');
+  if (file) {
+    if (!verifyEventMac(anchorMessage(file.seq, file.hash), file.mac)) return out('mismatch', file);
+    fileAnchor = file;
+    const s = against(file, true);
+    if (s !== 'ok') return out(s, file);
+  }
+
+  const k = readKeychainAnchor();
+  if (k) {
+    const s = against(k, false);
+    if (s !== 'ok') {
+      // The file is older than the Keychain and the log matches the file: both were rolled back.
+      if (fileAnchor && fileAnchor.seq < k.seq && s === 'truncated') return out('rolled_back', k);
+      return out(s, k);
+    }
+  }
+  if (!fileAnchor) {
+    // Signed entries from after the newest reset must have an anchor; ones before it were
+    // signed with a key that no longer exists, and the anchor was deleted with it.
+    if (entries.some((e) => e.mac !== null && e.seq > resetSeq)) return out('missing');
+  }
+  return out('ok', fileAnchor ?? undefined);
+}
+
+export function checkAnchor(): AnchorStatus {
+  return anchorCheck().status;
+}
+
+let guarding = false;
+/**
+ * Checks the anchor and, if it fails, records a signed `tamper_detected` entry and warns once on
+ * stderr. The entry's own signed append rewrites the anchor to the new head, so the next check is
+ * clean; the record stays in the log for good. Call before a checkpoint or any signed append.
+ */
+export function guardAnchor(): AnchorStatus {
+  if (guarding) return 'ok';
+  const c = anchorCheck();
+  if (c.status === 'ok' || c.status === 'unchecked') return c.status;
+  guarding = true;
+  try {
+    appendEvent('tamper_detected', {
+      anchor: c.status,
+      expectedSeq: c.expectedSeq ?? null,
+      expectedHash: c.expectedHash ? c.expectedHash.slice(0, 12) : null,
+      foundSeq: c.foundSeq,
+    });
+    // Only once the record exists: if the log itself cannot be written, the caller's own failure
+    // handling speaks, and an unlock must stay silent about it.
+    process.stderr.write(`wickey: the security event log failed its anchor check (${c.status}). It was recorded as a tamper_detected event.\n`);
+  } catch { /* unwritable log: nothing more can be recorded */ } finally {
+    guarding = false;
+  }
+  return c.status;
+}
+
 function rawText(): string {
   try {
     return fs.readFileSync(file(), 'utf8');
@@ -109,7 +255,12 @@ export function appendEvent(type: string, data: EventData = {}, opts: { signed?:
     if (typeof v === 'string' && v.startsWith('sk-wick-')) throw new Error('Event data must not carry a proxy key.');
   }
   const canSign = opts.signed !== false && isUnlocked();
-  if (canSign && type !== 'checkpoint') checkpoint();
+  // Anchor first: a checkpoint would sign whatever unsigned chain is there. tamper_detected skips
+  // the checkpoint because its own MAC covers the chain and it must come right after the tamper.
+  if (canSign && type !== 'checkpoint' && type !== 'tamper_detected') {
+    guardAnchor();
+    checkpoint(false);
+  }
 
   const text = rawText();
   const all = lines(text);
@@ -132,6 +283,7 @@ export function appendEvent(type: string, data: EventData = {}, opts: { signed?:
   } finally {
     fs.closeSync(fd);
   }
+  writeAnchor(entry);
   return entry;
 }
 
@@ -139,8 +291,9 @@ export function appendEvent(type: string, data: EventData = {}, opts: { signed?:
  * Call after an unlock or a new setup. If the newest entry has no MAC (written while locked, or a
  * `reset`), appends a `checkpoint` whose MAC covers it. Returns the entry, or null if nothing to do.
  */
-export function checkpoint(): EventEntry | null {
+export function checkpoint(guard = true): EventEntry | null {
   if (!isUnlocked()) return null;
+  if (guard) guardAnchor();
   const all = lines(rawText());
   if (all.length === 0) return null;
   const last = parse(all[all.length - 1]);
@@ -211,17 +364,34 @@ function analyze(): Analysis {
     beforeReset: values.filter((t) => t === 'before_reset').length,
     whileLocked: values.filter((t) => t === 'recorded_while_locked').length,
     notes,
+    anchor: 'unchecked',
   };
   return { summary, trust, entries };
 }
 
+/** Folds the anchor check into a summary. Any tamper status makes it not ok. */
+function withAnchor(a: Analysis): Analysis {
+  const c = anchorCheck();
+  const s = a.summary;
+  s.anchor = c.status;
+  if (c.status === 'unchecked') s.notes.push('The anchor was not checked because Wickey is locked.');
+  else if (c.status !== 'ok' && s.ok) {
+    s.ok = false;
+    s.reason = `the log does not match its anchor (${c.status}): entries were removed, rewritten or rolled back`;
+    if (c.expectedSeq !== undefined) s.firstBadSeq = c.expectedSeq;
+  }
+  const detected = a.entries.filter((e) => e.type === 'tamper_detected').length;
+  if (detected > 0) s.notes.push(`${detected} tamper detection${detected === 1 ? '' : 's'} recorded in this log.`);
+  return a;
+}
+
 export function verifyLog(): LogSummary {
-  return analyze().summary;
+  return withAnchor(analyze()).summary;
 }
 
 /** Newest first. `before` is exclusive (pass the last seq of the previous page). */
 export function listEvents(opts: { before?: number; limit?: number } = {}): { events: LoggedEvent[]; summary: LogSummary } {
-  const { summary, trust, entries } = analyze();
+  const { summary, trust, entries } = withAnchor(analyze());
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
   const events = entries
     .filter((e) => opts.before === undefined || e.seq < opts.before)
