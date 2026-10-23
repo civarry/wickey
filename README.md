@@ -50,7 +50,7 @@ and with what limits, and keeps the gateway's own key out of your agents' hands.
 - Node.js 24 or newer. It runs the TypeScript source directly: no build step, no runtime dependencies.
 
 ```sh
-git clone <this repo> && cd wickey
+git clone https://github.com/civarry/wickey.git && cd wickey
 npm install      # dev tools only: typescript, @types/node
 npm link         # puts `wickey` on your PATH
 ```

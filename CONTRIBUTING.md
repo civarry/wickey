@@ -48,7 +48,7 @@ entered by hand, so they are deferred. Discuss them in an issue before building.
 You need Node.js 24 or newer.
 
 ```sh
-git clone <this repo> && cd wickey
+git clone https://github.com/civarry/wickey.git && cd wickey
 npm install          # dev tools only; also builds the dashboard (web/dist)
 npm test             # node:test, uses a fake upstream
 npm run typecheck    # same as npx tsc
