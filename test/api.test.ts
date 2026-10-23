@@ -160,6 +160,7 @@ test('full lifecycle over the API: add, issue, expire, renew, rotate, delete, re
   assert.equal(issued.body.baseUrl, `http://127.0.0.1:${port}/p/${issued.body.proxy.id}`);
   assert.equal(issued.body.proxy.ttlSeconds, 90);
   const id = issued.body.proxy.id;
+
   // A dashboard opened at localhost still hands out 127.0.0.1: the proxy listens on IPv4 only, and
   // localhost can resolve to ::1 first, where a client without fallback gets connection refused.
   const viaLocalhost = { host: `localhost:${port}`, origin: `http://localhost:${port}` };
@@ -216,6 +217,32 @@ test('API validation errors come back as messages', async () => {
   assert.equal(withEndpoint.status, 400);
   assert.match(withEndpoint.body.error.message, /Use https:\/\/openrouter\.ai\/api\/v1 instead/);
   assert.equal(store.listCredentials().length, 0);
+});
+
+test('unknown body fields are refused, not silently dropped', async () => {
+  const add = await request({ method: 'POST', path: '/api/credentials', body: { name: 'strict', provider: 'openai', apiKey: 'sk-strict' } });
+  assert.equal(add.status, 201);
+  const before = store.listProxies().length;
+
+  // A misspelled TTL used to issue a 60 s key without complaint.
+  const typo = await request({ method: 'POST', path: '/api/proxies', body: { credential: 'strict', ttlSeconds: 3600, name: 'agent' } });
+  assert.equal(typo.status, 400);
+  assert.match(typo.body.error.message, /Unknown fields "ttlSeconds", "name"\. This request takes: credential, label, ttl/);
+  assert.equal(store.listProxies().length, before, 'a refused request must not mint a key');
+
+  for (const body of [[], 'ttl', 42, null]) {
+    const res = await request({ method: 'POST', path: '/api/proxies', body });
+    assert.equal(res.status, 400, `body ${JSON.stringify(body)}`);
+    assert.match(res.body.error.message, /JSON object/);
+  }
+  assert.equal((await request({ method: 'PATCH', path: '/api/credentials/strict', body: { provider: 'anthropic' } })).status, 400);
+  assert.equal((await request({ method: 'POST', path: '/api/setup', body: { passphrase: 'x', extra: 1 } })).status, 400);
+
+  // The documented fields, plus the passphrase the dashboard and CLI add on retry, still work.
+  const ok = await request({ method: 'POST', path: '/api/proxies', body: { credential: 'strict', ttl: '1h', label: 'agent', passphrase: 'correct horse battery staple' } });
+  assert.equal(ok.status, 201);
+  assert.equal(ok.body.proxy.ttlSeconds, 3600);
+  store.removeCredential(add.body.credential.id);
 });
 
 test('PATCH edits a credential; blank key keeps the old one; bad edits are rejected', async () => {

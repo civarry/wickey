@@ -156,7 +156,11 @@ function isTrusted(req: http.IncomingMessage, requireHeader: boolean): boolean {
   return true;
 }
 
-async function readJson(req: http.IncomingMessage): Promise<Record<string, any>> {
+/**
+ * Parses the body and refuses fields the route doesn't read. A misspelled field would otherwise be
+ * dropped silently and the request would run with a default (a 60 s key instead of the asked TTL).
+ */
+async function readJson(req: http.IncomingMessage, fields: readonly string[]): Promise<Record<string, any>> {
   let size = 0;
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
@@ -165,11 +169,18 @@ async function readJson(req: http.IncomingMessage): Promise<Record<string, any>>
     chunks.push(chunk);
   }
   if (!chunks.length) return {};
+  let body: unknown;
   try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
   } catch {
     throw new HttpError(400, 'Body must be JSON.');
   }
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) throw new HttpError(400, 'Body must be a JSON object.');
+  const unknown = Object.keys(body).filter((k) => !fields.includes(k));
+  if (unknown.length) {
+    throw new HttpError(400, `Unknown field${unknown.length > 1 ? 's' : ''} ${unknown.map((k) => `"${k}"`).join(', ')}. This request takes: ${fields.join(', ')}.`);
+  }
+  return body as Record<string, any>;
 }
 
 function ttlFrom(value: unknown, fallback: number | undefined): number | undefined {
@@ -214,7 +225,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
   }
 
   if (method === 'POST' && path === '/api/signin') {
-    const body = await readJson(req);
+    const body = await readJson(req, ['passphrase']);
     signIn(String(body.passphrase ?? ''));
     // A new session each time: a cookie that was sent along is never promoted.
     return json(res, 200, { session: sessionState() }, sessionCookie(createSession()));
@@ -234,7 +245,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
   }
 
   if (method === 'POST' && path === '/api/setup') {
-    const body = await readJson(req);
+    const body = await readJson(req, ['passphrase']);
     if (vaultExists()) throw new HttpError(409, 'A passphrase is already set.');
     const passphrase = String(body.passphrase ?? '');
     if (passphrase.length < MIN_PASSPHRASE) throw new HttpError(400, `Passphrase must be at least ${MIN_PASSPHRASE} characters.`);
@@ -243,14 +254,14 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
   }
 
   if (method === 'POST' && path === '/api/unlock') {
-    const body = await readJson(req);
+    const body = await readJson(req, ['passphrase']);
     unlock(String(body.passphrase ?? ''));
     return json(res, 200, { session: sessionState() }, sessionCookie(createSession()));
   }
 
   // Carries its own passphrases, like unlock: never the shared passphrase-retry flow, and never the grace period.
   if (method === 'POST' && path === '/api/passphrase') {
-    const body = await readJson(req);
+    const body = await readJson(req, ['current', 'next']);
     if (typeof body.current !== 'string' || typeof body.next !== 'string' || !body.current || !body.next) {
       throw new HttpError(400, 'Send the current and the new passphrase.');
     }
@@ -268,7 +279,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
   }
 
   if (method === 'POST' && path === '/api/env') {
-    const body = await readJson(req);
+    const body = await readJson(req, ['credential', 'label', 'ttl', 'limits', 'autoRenew', 'passphrase']);
     const label = String(body.label ?? '').trim();
     const credential = String(body.credential ?? '').trim();
     if (!label || !credential) throw new HttpError(400, 'label and credential are required.');
@@ -280,7 +291,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
   }
 
   if (method === 'POST' && path === '/api/credentials') {
-    const body = await readJson(req);
+    const body = await readJson(req, ['name', 'provider', 'apiKey', 'baseUrl', 'authStyle', 'passphrase']);
     const name = String(body.name ?? '').trim();
     if (!isProvider(String(body.provider))) throw new HttpError(400, 'Unknown provider.');
     if (body.authStyle && body.authStyle !== 'bearer' && body.authStyle !== 'x-api-key') throw new HttpError(400, 'Invalid auth style.');
@@ -297,7 +308,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
 
   // Both modes need auth: even a dry run tells the caller whether a given key is already stored.
   if (method === 'POST' && path === '/api/credentials/import') {
-    const body = await readJson(req);
+    const body = await readJson(req, ['entries', 'dryRun', 'passphrase']);
     auth(body);
     if (!Array.isArray(body.entries) || !body.entries.length) throw new HttpError(400, 'entries must be a non-empty list.');
     if (body.entries.length > MAX_IMPORT_ENTRIES) throw new HttpError(400, `Import at most ${MAX_IMPORT_ENTRIES} credentials at a time.`);
@@ -306,7 +317,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
   }
 
   if (method === 'PATCH' && (m = /^\/api\/credentials\/([^/]+)$/.exec(path))) {
-    const body = await readJson(req);
+    const body = await readJson(req, ['name', 'baseUrl', 'authStyle', 'apiKey', 'passphrase']);
     const str = (v: unknown) => (v === undefined || v === null ? undefined : String(v).trim());
     const apiKey = str(body.apiKey);
     // Editing can point a real key at a different server, so it needs the same gate as minting.
@@ -339,7 +350,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
   }
 
   if (method === 'POST' && path === '/api/proxies') {
-    const body = await readJson(req);
+    const body = await readJson(req, ['credential', 'label', 'ttl', 'limits', 'autoRenew', 'passphrase']);
     auth(body);
     const issued = issueProxy({
       credential: String(body.credential ?? ''),
@@ -352,7 +363,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
   }
 
   if (method === 'PATCH' && (m = /^\/api\/proxies\/([a-f0-9]+)\/limits$/.exec(path))) {
-    const body = await readJson(req);
+    const body = await readJson(req, ['limits', 'autoRenew', 'passphrase']);
     const existing = getProxy(m[1]);
     if (!existing) throw new HttpError(404, `No proxy with id "${m[1]}".`);
     // autoRenew: absent = unchanged, null = turn off, object = set (see normalizeAutoRenew).
@@ -393,7 +404,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
   }
 
   if (method === 'POST' && (m = /^\/api\/proxies\/([a-f0-9]+)\/renew$/.exec(path))) {
-    const body = await readJson(req);
+    const body = await readJson(req, ['ttl', 'passphrase']);
     auth(body);
     const proxy = renewProxy(m[1], ttlFrom(body.ttl, undefined));
     // The key itself is unchanged and not stored, so there is nothing to show.
@@ -401,7 +412,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, path: 
   }
 
   if (method === 'POST' && (m = /^\/api\/proxies\/([a-f0-9]+)\/rotate$/.exec(path))) {
-    const body = await readJson(req);
+    const body = await readJson(req, ['ttl', 'passphrase']);
     auth(body);
     return json(res, 200, issuedBody(req, rotateProxy(m[1], ttlFrom(body.ttl, undefined))));
   }
